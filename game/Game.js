@@ -95,16 +95,16 @@ class Game {
     }
     
     removePlayer(id) {
-        const cellsCleared = this.grid.clearPlayerCells(id);
+        const clearResult = this.grid.clearPlayerCells(id);
         
-        for (const cell of cellsCleared) {
+        for (const cell of clearResult.cellsToReset) {
             this.grid.recoverCell(cell.x, cell.y);
         }
         
         this.players.delete(id);
         this.deadPlayers.delete(id);
         
-        return cellsCleared;
+        return clearResult.cellsToReset;
     }
     
     startCellRecovery(playerId) {
@@ -132,6 +132,13 @@ class Game {
     
     getActivePlayers() {
         return Array.from(this.players.values()).map(p => p.toJSON());
+    }
+    
+    getLeaderboard() {
+        const players = Array.from(this.players.values())
+            .map(p => ({ id: p.id, score: p.score }))
+            .sort((a, b) => b.score - a.score);
+        return players;
     }
     
     isAdjacentToPlayerCell(playerId, x, y) {
@@ -171,6 +178,126 @@ class Game {
         return false;
     }
     
+    handleChord(playerId, data) {
+        const { x, y } = data;
+        const player = this.players.get(playerId);
+        
+        if (!player || !player.alive) {
+            return { success: false, error: 'Player not alive' };
+        }
+        
+        const cell = this.grid.getCell(x, y);
+        
+        if (cell.state !== 'uncovered' || cell.owner !== playerId) {
+            return { success: false, error: 'Can only chord on your uncovered cells' };
+        }
+        
+        if (cell.adjacentMines === 0) {
+            return { success: false, error: 'No adjacent mines to chord' };
+        }
+        
+        let flagCount = 0;
+        const adjacentCells = [];
+        
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                if (dx === 0 && dy === 0) continue;
+                const adjCell = this.grid.getCell(x + dx, y + dy);
+                adjacentCells.push({ x: x + dx, y: y + dy, cell: adjCell });
+                if (adjCell.flag) {
+                    flagCount++;
+                }
+            }
+        }
+        
+        if (flagCount !== cell.adjacentMines) {
+            return { success: false, error: 'Flag count does not match number' };
+        }
+        
+        let allUncoveredCells = [];
+        let hitMine = false;
+        let mineCell = null;
+        
+        for (const { x: ax, y: ay, cell: adjCell } of adjacentCells) {
+            if (adjCell.state === 'covered' && !adjCell.flag) {
+                const result = this.grid.uncoverCell(ax, ay, playerId);
+                
+                if (result.success) {
+                    if (result.isMine) {
+                        hitMine = true;
+                        mineCell = { x: ax, y: ay };
+                    }
+                    allUncoveredCells = allUncoveredCells.concat(result.uncoveredCells);
+                }
+            }
+        }
+        
+        if (hitMine) {
+            player.die();
+            this.deadPlayers.set(playerId, Date.now());
+            
+            const clearResult = this.grid.clearPlayerCells(playerId);
+            const playerCells = clearResult.cellsToReset;
+            
+            if (clearResult.flagsToRemove.length > 0 && this.io) {
+                this.io.emit('flagsRemoved', { 
+                    playerId: playerId,
+                    flags: clearResult.flagsToRemove 
+                });
+            }
+            
+            setTimeout(() => {
+                this.recoverPlayerCells(playerId, playerCells);
+            }, 2000);
+            
+            return {
+                success: true,
+                update: {
+                    type: 'death',
+                    playerId: playerId,
+                    mineCell: mineCell,
+                    playerCells: playerCells,
+                    uncoveredCells: allUncoveredCells
+                }
+            };
+        }
+        
+        player.score += allUncoveredCells.length;
+        
+        if (!this.hasValidMoves(playerId)) {
+            player.die();
+            this.deadPlayers.set(playerId, Date.now());
+            
+            const clearResult = this.grid.clearPlayerCells(playerId);
+            const playerCells = clearResult.cellsToReset;
+            
+            setTimeout(() => {
+                this.recoverPlayerCells(playerId, playerCells);
+            }, 2000);
+            
+            return {
+                success: true,
+                update: {
+                    type: 'noMoves',
+                    playerId: playerId,
+                    playerCells: playerCells,
+                    uncoveredCells: allUncoveredCells,
+                    score: player.score
+                }
+            };
+        }
+        
+        return {
+            success: true,
+            update: {
+                type: 'move',
+                playerId: playerId,
+                uncoveredCells: allUncoveredCells,
+                score: player.score
+            }
+        };
+    }
+    
     handleMove(playerId, data) {
         const player = this.players.get(playerId);
         if (!player || !player.alive) {
@@ -198,7 +325,15 @@ class Game {
             player.die();
             this.deadPlayers.set(playerId, Date.now());
             
-            const playerCells = this.grid.getPlayerCells(playerId);
+            const clearResult = this.grid.clearPlayerCells(playerId);
+            const playerCells = clearResult.cellsToReset;
+            
+            if (clearResult.flagsToRemove.length > 0 && this.io) {
+                this.io.emit('flagsRemoved', { 
+                    playerId: playerId,
+                    flags: clearResult.flagsToRemove 
+                });
+            }
             
             setTimeout(() => {
                 this.recoverPlayerCells(playerId, playerCells);

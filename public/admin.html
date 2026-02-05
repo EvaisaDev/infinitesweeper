@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Infinite Sweeper</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'MS Sans Serif', 'Microsoft Sans Serif', sans-serif;
+            background: rgb(0, 134, 137);
+            color: #000000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .window {
+            background-color: rgb(192, 192, 192);
+            border-width: 2px;
+            border-style: solid;
+            border-color: rgb(255, 255, 255) rgb(0, 0, 0) rgb(0, 0, 0) rgb(255, 255, 255);
+            min-width: 400px;
+            max-width: 600px;
+            box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        
+        .title-bar {
+            background: linear-gradient(to right, rgb(11, 36, 106), rgb(166, 202, 240));
+            color: rgb(255, 255, 255);
+            display: flex;
+            font-weight: 700;
+            height: 18px;
+            padding: 2px 4px;
+            align-items: center;
+            font-size: 11px;
+        }
+        
+        .content {
+            padding: 20px;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        label {
+            display: block;
+            font-size: 11px;
+            font-weight: bold;
+            margin-bottom: 4px;
+            margin-top: 12px;
+        }
+        
+        input[type="password"],
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 4px;
+            border-width: 1px;
+            border-style: solid;
+            border-color: rgb(128, 128, 128) rgb(255, 255, 255) rgb(255, 255, 255) rgb(128, 128, 128);
+            font-family: 'MS Sans Serif', 'Microsoft Sans Serif', sans-serif;
+            font-size: 11px;
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        button {
+            background-color: rgb(192, 192, 192);
+            border-width: 2px;
+            border-style: solid;
+            border-color: rgb(255, 255, 255) rgb(0, 0, 0) rgb(0, 0, 0) rgb(255, 255, 255);
+            padding: 4px 12px;
+            font-family: 'MS Sans Serif', 'Microsoft Sans Serif', sans-serif;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 12px;
+            margin-right: 8px;
+        }
+        
+        button:active {
+            border-color: rgb(0, 0, 0) rgb(255, 255, 255) rgb(255, 255, 255) rgb(0, 0, 0);
+            padding: 5px 11px 3px 13px;
+        }
+        
+        .error {
+            color: rgb(128, 0, 0);
+            font-size: 11px;
+            margin-top: 8px;
+        }
+        
+        .success {
+            color: rgb(0, 128, 0);
+            font-size: 11px;
+            margin-top: 8px;
+        }
+        
+        .stats {
+            background-color: rgb(192, 192, 192);
+            border-width: 2px;
+            border-style: solid;
+            border-color: rgb(128, 128, 128) rgb(255, 255, 255) rgb(255, 255, 255) rgb(128, 128, 128);
+            padding: 8px;
+            margin-top: 12px;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="window" id="loginWindow">
+        <div class="title-bar">
+            Admin Login
+        </div>
+        <div class="content">
+            <label for="username">Username:</label>
+            <input type="text" id="username" placeholder="Enter admin username" value="admin">
+            
+            <label for="password">Password:</label>
+            <input type="password" id="password" placeholder="Enter admin password">
+            <button id="loginBtn">Login</button>
+            <div id="loginError" class="error hidden"></div>
+        </div>
+    </div>
+    
+    <div class="window hidden" id="adminPanel">
+        <div class="title-bar">
+            Admin Panel - Infinite Sweeper
+        </div>
+        <div class="content">
+            <h3 style="font-size: 14px; margin-bottom: 12px;">Broadcast Message</h3>
+            
+            <label for="messageTitle">Title:</label>
+            <input type="text" id="messageTitle" placeholder="Message Title" value="Server Announcement">
+            
+            <label for="messageText">Message:</label>
+            <textarea id="messageText" placeholder="Enter your message here..."></textarea>
+            
+            <button id="sendMessageBtn">Send to All Players</button>
+            <button id="logoutBtn">Logout</button>
+            
+            <div id="messageStatus" class="hidden"></div>
+            
+            <div class="stats">
+                <strong>Server Statistics:</strong><br>
+                Connected Players: <span id="playerCount">0</span>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let authenticated = false;
+        let authToken = null;
+        
+        const loginWindow = document.getElementById('loginWindow');
+        const adminPanel = document.getElementById('adminPanel');
+        const loginBtn = document.getElementById('loginBtn');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const sendMessageBtn = document.getElementById('sendMessageBtn');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const loginError = document.getElementById('loginError');
+        const messageStatus = document.getElementById('messageStatus');
+        const playerCountEl = document.getElementById('playerCount');
+        
+        loginBtn.addEventListener('click', () => {
+            const username = usernameInput.value;
+            const password = passwordInput.value;
+            socket.emit('adminLogin', { username, password });
+        });
+        
+        passwordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loginBtn.click();
+            }
+        });
+        
+        sendMessageBtn.addEventListener('click', () => {
+            const title = document.getElementById('messageTitle').value;
+            const text = document.getElementById('messageText').value;
+            
+            if (!text.trim()) {
+                showMessage('Please enter a message', 'error');
+                return;
+            }
+            
+            socket.emit('adminBroadcast', { token: authToken, title, text });
+        });
+        
+        logoutBtn.addEventListener('click', () => {
+            authenticated = false;
+            authToken = null;
+            loginWindow.classList.remove('hidden');
+            adminPanel.classList.add('hidden');
+            passwordInput.value = '';
+        });
+        
+        socket.on('adminLoginResult', (data) => {
+            if (data.success) {
+                authenticated = true;
+                authToken = data.token;
+                loginWindow.classList.add('hidden');
+                adminPanel.classList.remove('hidden');
+                loginError.classList.add('hidden');
+            } else {
+                loginError.textContent = 'Invalid username or password';
+                loginError.classList.remove('hidden');
+            }
+        });
+        
+        socket.on('adminBroadcastResult', (data) => {
+            if (data.success) {
+                showMessage('Message sent successfully!', 'success');
+                document.getElementById('messageText').value = '';
+            } else {
+                showMessage(data.error || 'Failed to send message', 'error');
+                if (data.error === 'Unauthorized') {
+                    authenticated = false;
+                    authToken = null;
+                    loginWindow.classList.remove('hidden');
+                    adminPanel.classList.add('hidden');
+                }
+            }
+        });
+        
+        socket.on('adminStats', (data) => {
+            playerCountEl.textContent = data.playerCount;
+        });
+        
+        function showMessage(text, type) {
+            messageStatus.textContent = text;
+            messageStatus.className = type;
+            messageStatus.classList.remove('hidden');
+            setTimeout(() => {
+                messageStatus.classList.add('hidden');
+            }, 3000);
+        }
+        
+        setInterval(() => {
+            if (authenticated && authToken) {
+                socket.emit('requestAdminStats', { token: authToken });
+            }
+        }, 2000);
+    </script>
+</body>
+</html>

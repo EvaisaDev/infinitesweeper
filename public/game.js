@@ -24,6 +24,39 @@ let panStartY = 0;
 let dragThreshold = 5;
 let zoom = 1.0;
 let deadPlayerCells = new Map();
+let lastCameraX = 0;
+let lastCameraY = 0;
+let lastZoom = 1.0;
+let chunkTextures = new Map();
+let offscreenCanvas = document.createElement('canvas');
+let offscreenCtx = offscreenCanvas.getContext('2d', { alpha: true });
+offscreenCanvas.width = CHUNK_SIZE * CELL_SIZE;
+offscreenCanvas.height = CHUNK_SIZE * CELL_SIZE;
+
+let gridPattern = null;
+let gridPatternCanvas = document.createElement('canvas');
+gridPatternCanvas.width = CELL_SIZE;
+gridPatternCanvas.height = CELL_SIZE;
+const gridPatternCtx = gridPatternCanvas.getContext('2d');
+
+gridPatternCtx.fillStyle = 'rgb(128, 128, 128)';
+gridPatternCtx.fillRect(0, 0, CELL_SIZE, CELL_SIZE);
+
+gridPatternCtx.strokeStyle = 'rgb(160, 160, 160)';
+gridPatternCtx.lineWidth = 2;
+gridPatternCtx.beginPath();
+gridPatternCtx.moveTo(1, CELL_SIZE - 1);
+gridPatternCtx.lineTo(1, 1);
+gridPatternCtx.lineTo(CELL_SIZE - 1, 1);
+gridPatternCtx.stroke();
+
+gridPatternCtx.strokeStyle = 'rgb(80, 80, 80)';
+gridPatternCtx.lineWidth = 2;
+gridPatternCtx.beginPath();
+gridPatternCtx.moveTo(CELL_SIZE - 1, 1);
+gridPatternCtx.lineTo(CELL_SIZE - 1, CELL_SIZE - 1);
+gridPatternCtx.lineTo(1, CELL_SIZE - 1);
+gridPatternCtx.stroke();
 
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
@@ -40,6 +73,10 @@ socket.on('init', (data) => {
     
     cameraX = player.x * CELL_SIZE;
     cameraY = player.y * CELL_SIZE;
+    
+    players.clear();
+    chunks.clear();
+    deadPlayerCells.clear();
     
     for (const p of data.activePlayers) {
         players.set(p.id, p);
@@ -62,8 +99,13 @@ socket.on('playerLeft', (id) => {
 socket.on('cellsCleared', (data) => {
     console.log('Cells cleared, refreshing chunks');
     if (data.cells && data.cells.length > 0) {
-        invalidateChunksForCells(data.cells);
-        requestVisibleChunks();
+        requestChunksForCells(data.cells);
+    }
+});
+
+socket.on('flagsRemoved', (data) => {
+    if (data.flags && data.flags.length > 0) {
+        requestChunksForCells(data.flags);
     }
 });
 
@@ -97,14 +139,12 @@ socket.on('gameUpdate', (data) => {
         }
         
         if (data.uncoveredCells && data.uncoveredCells.length > 0) {
-            invalidateChunksForCells(data.uncoveredCells);
-            requestVisibleChunks();
+            requestChunksForCells(data.uncoveredCells);
         }
         
     } else if (data.type === 'flag') {
         if (data.x !== undefined && data.y !== undefined) {
-            invalidateChunksForCell(data.x, data.y);
-            requestVisibleChunks();
+            requestChunksForCells([{ x: data.x, y: data.y }]);
         }
         
     } else if (data.type === 'respawn') {
@@ -129,8 +169,7 @@ socket.on('gameUpdate', (data) => {
         }
         
         if (data.uncoveredCells && data.uncoveredCells.length > 0) {
-            invalidateChunksForCells(data.uncoveredCells);
-            requestVisibleChunks();
+            requestChunksForCells(data.uncoveredCells);
         }
         
     } else if (data.updates) {
@@ -149,10 +188,9 @@ socket.on('gameUpdate', (data) => {
             }
             
             if (update.uncoveredCells && update.uncoveredCells.length > 0) {
-                invalidateChunksForCells(update.uncoveredCells);
+                requestChunksForCells(update.uncoveredCells);
             }
         }
-        requestVisibleChunks();
     }
     
     updateUI();
@@ -214,6 +252,8 @@ socket.on('chunks', (chunksData) => {
         const key = `${newChunk.x},${newChunk.y}`;
         const existingChunk = chunks.get(key);
         
+        let chunkChanged = false;
+        
         if (existingChunk) {
             for (const newCell of newChunk.cells) {
                 let found = false;
@@ -229,6 +269,7 @@ socket.on('chunks', (chunksData) => {
                             existingCell.flag = newCell.flag;
                             existingCell.isMine = newCell.isMine;
                             existingCell.adjacentMines = newCell.adjacentMines;
+                            chunkChanged = true;
                         }
                         found = true;
                         break;
@@ -236,19 +277,44 @@ socket.on('chunks', (chunksData) => {
                 }
                 if (!found) {
                     existingChunk.cells.push(newCell);
+                    chunkChanged = true;
                 }
             }
         } else {
             chunks.set(key, newChunk);
+            chunkChanged = true;
+        }
+        
+        if (chunkChanged) {
+            chunkTextures.delete(key);
         }
     }
     updatePlayerCells();
-    render();
 });
 
 socket.on('error', (error) => {
     console.error('Game error:', error);
 });
+
+socket.on('adminMessage', (data) => {
+    showAdminPopup(data.title, data.text);
+});
+
+socket.on('leaderboard', (data) => {
+    updateLeaderboard(data);
+});
+
+function showAdminPopup(title, text) {
+    document.getElementById('adminPopupTitle').textContent = title;
+    document.getElementById('adminPopupText').textContent = text;
+    document.getElementById('adminPopup').style.display = 'flex';
+}
+
+function closeAdminPopup() {
+    document.getElementById('adminPopup').style.display = 'none';
+}
+
+window.closeAdminPopup = closeAdminPopup;
 
 function handleDeath(reason) {
     isDead = true;
@@ -341,16 +407,226 @@ function invalidateChunksForCell(x, y) {
     chunks.delete(`${chunkX},${chunkY}`);
 }
 
-function requestVisibleChunks() {
-    const chunkKeys = [];
+function requestChunksForCells(cells) {
+    const chunkKeys = new Set();
+    const visibleChunks = getVisibleChunkKeys();
     
-    const buffer = zoom < 0.75 ? 1 : 2;
+    for (const cell of cells) {
+        const chunkX = Math.floor(cell.x / CHUNK_SIZE);
+        const chunkY = Math.floor(cell.y / CHUNK_SIZE);
+        const chunkKey = `${chunkX},${chunkY}`;
+        
+        if (visibleChunks.has(chunkKey)) {
+            chunkKeys.add(chunkKey);
+        }
+    }
+    
+    if (chunkKeys.size > 0) {
+        socket.emit('requestChunks', { chunkKeys: Array.from(chunkKeys) });
+    }
+}
+
+function getVisibleChunkKeys() {
+    const keys = new Set();
+    const buffer = zoom < 0.75 ? 0 : 1;
     const startChunkX = Math.floor((cameraX - canvas.width / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) - buffer;
     const endChunkX = Math.floor((cameraX + canvas.width / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) + buffer;
     const startChunkY = Math.floor((cameraY - canvas.height / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) - buffer;
     const endChunkY = Math.floor((cameraY + canvas.height / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) + buffer;
     
-    const maxChunks = 100;
+    for (let cx = startChunkX; cx <= endChunkX; cx++) {
+        for (let cy = startChunkY; cy <= endChunkY; cy++) {
+            keys.add(`${cx},${cy}`);
+        }
+    }
+    
+    return keys;
+}
+
+function cleanupDistantChunks() {
+    const visibleKeys = getVisibleChunkKeys();
+    const cleanupDistance = 5;
+    const buffer = zoom < 0.75 ? 0 : 1;
+    const startChunkX = Math.floor((cameraX - canvas.width / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) - buffer - cleanupDistance;
+    const endChunkX = Math.floor((cameraX + canvas.width / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) + buffer + cleanupDistance;
+    const startChunkY = Math.floor((cameraY - canvas.height / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) - buffer - cleanupDistance;
+    const endChunkY = Math.floor((cameraY + canvas.height / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) + buffer + cleanupDistance;
+    
+    for (const [key, chunk] of chunks.entries()) {
+        if (!visibleKeys.has(key)) {
+            const [cx, cy] = key.split(',').map(Number);
+            if (cx < startChunkX || cx > endChunkX || cy < startChunkY || cy > endChunkY) {
+                chunks.delete(key);
+                chunkTextures.delete(key);
+            }
+        }
+    }
+}
+
+function renderChunkToTexture(chunk) {
+    const chunkKey = `${chunk.x},${chunk.y}`;
+    
+    offscreenCtx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
+    
+    const numberColors = [
+        null,
+        'rgb(0, 0, 255)',
+        'rgb(0, 128, 0)',
+        'rgb(255, 0, 0)',
+        'rgb(0, 0, 128)',
+        'rgb(128, 0, 0)',
+        'rgb(0, 128, 128)',
+        'rgb(0, 0, 0)',
+        'rgb(128, 128, 128)'
+    ];
+    
+    for (const cell of chunk.cells) {
+        const localX = cell.x - chunk.x * CHUNK_SIZE;
+        const localY = cell.y - chunk.y * CHUNK_SIZE;
+        const screenX = localX * CELL_SIZE;
+        const screenY = localY * CELL_SIZE;
+        
+        const cellKey = `${cell.x},${cell.y}`;
+        let isDeadCell = false;
+        let isMineCell = false;
+        
+        for (const [deadPlayerId, deadData] of deadPlayerCells.entries()) {
+            if (deadData.cells.has(cellKey)) {
+                isDeadCell = true;
+                if (deadData.mineCell && cell.x === deadData.mineCell.x && cell.y === deadData.mineCell.y) {
+                    isMineCell = true;
+                }
+                break;
+            }
+        }
+        
+        if (cell.state === 'uncovered') {
+            offscreenCtx.fillStyle = 'rgb(192, 192, 192)';
+            offscreenCtx.fillRect(screenX, screenY, CELL_SIZE, CELL_SIZE);
+            
+            offscreenCtx.strokeStyle = 'rgb(128, 128, 128)';
+            offscreenCtx.lineWidth = 1;
+            offscreenCtx.beginPath();
+            offscreenCtx.moveTo(screenX, screenY + CELL_SIZE - 0.5);
+            offscreenCtx.lineTo(screenX, screenY);
+            offscreenCtx.lineTo(screenX + CELL_SIZE - 0.5, screenY);
+            offscreenCtx.stroke();
+            
+            if (cell.owner && !isDeadCell) {
+                const owner = players.get(cell.owner);
+                if (owner) {
+                    offscreenCtx.fillStyle = owner.color;
+                    offscreenCtx.globalAlpha = 0.12;
+                    offscreenCtx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+                    offscreenCtx.globalAlpha = 1.0;
+                }
+            } else if (isDeadCell) {
+                offscreenCtx.fillStyle = 'rgb(100, 100, 100)';
+                offscreenCtx.globalAlpha = 0.3;
+                offscreenCtx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+                offscreenCtx.globalAlpha = 1.0;
+            }
+            
+            if ((cell.isMine || isMineCell)) {
+                const mineRadius = 5;
+                const centerX = screenX + CELL_SIZE / 2;
+                const centerY = screenY + CELL_SIZE / 2;
+                
+                offscreenCtx.fillStyle = 'rgb(0, 0, 0)';
+                offscreenCtx.beginPath();
+                offscreenCtx.arc(centerX, centerY, mineRadius, 0, Math.PI * 2);
+                offscreenCtx.fill();
+                
+                offscreenCtx.strokeStyle = 'rgb(0, 0, 0)';
+                offscreenCtx.lineWidth = 2;
+                for (let i = 0; i < 8; i++) {
+                    const angle = (i * Math.PI) / 4;
+                    const x1 = centerX + Math.cos(angle) * mineRadius * 0.7;
+                    const y1 = centerY + Math.sin(angle) * mineRadius * 0.7;
+                    const x2 = centerX + Math.cos(angle) * (mineRadius + 6);
+                    const y2 = centerY + Math.sin(angle) * (mineRadius + 6);
+                    offscreenCtx.beginPath();
+                    offscreenCtx.moveTo(x1, y1);
+                    offscreenCtx.lineTo(x2, y2);
+                    offscreenCtx.stroke();
+                }
+                
+                offscreenCtx.fillStyle = 'rgb(255, 255, 255)';
+                offscreenCtx.beginPath();
+                offscreenCtx.arc(centerX - 2, centerY - 2, 2, 0, Math.PI * 2);
+                offscreenCtx.fill();
+            } else if (cell.adjacentMines > 0 && !isDeadCell && cell.owner === playerId) {
+                offscreenCtx.fillStyle = numberColors[cell.adjacentMines];
+                offscreenCtx.font = `bold 16px "MS Sans Serif", "Microsoft Sans Serif", sans-serif`;
+                offscreenCtx.textAlign = 'center';
+                offscreenCtx.textBaseline = 'middle';
+                offscreenCtx.fillText(cell.adjacentMines, screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2);
+            }
+        } else {
+            const canClick = isAdjacentToPlayerCell(cell.x, cell.y) && !isDead;
+            
+            if (canClick) {
+                offscreenCtx.fillStyle = 'rgb(192, 192, 192)';
+            } else {
+                offscreenCtx.fillStyle = 'rgb(128, 128, 128)';
+            }
+            offscreenCtx.fillRect(screenX, screenY, CELL_SIZE, CELL_SIZE);
+            
+            if (canClick) {
+                offscreenCtx.strokeStyle = 'rgb(255, 255, 255)';
+            } else {
+                offscreenCtx.strokeStyle = 'rgb(160, 160, 160)';
+            }
+            offscreenCtx.lineWidth = 2;
+            offscreenCtx.beginPath();
+            offscreenCtx.moveTo(screenX + 1, screenY + CELL_SIZE - 1);
+            offscreenCtx.lineTo(screenX + 1, screenY + 1);
+            offscreenCtx.lineTo(screenX + CELL_SIZE - 1, screenY + 1);
+            offscreenCtx.stroke();
+            
+            if (canClick) {
+                offscreenCtx.strokeStyle = 'rgb(128, 128, 128)';
+            } else {
+                offscreenCtx.strokeStyle = 'rgb(80, 80, 80)';
+            }
+            offscreenCtx.lineWidth = 2;
+            offscreenCtx.beginPath();
+            offscreenCtx.moveTo(screenX + CELL_SIZE - 1, screenY + 1);
+            offscreenCtx.lineTo(screenX + CELL_SIZE - 1, screenY + CELL_SIZE - 1);
+            offscreenCtx.lineTo(screenX + 1, screenY + CELL_SIZE - 1);
+            offscreenCtx.stroke();
+            
+            if (cell.flag) {
+                offscreenCtx.fillStyle = 'rgb(0, 0, 0)';
+                offscreenCtx.fillRect(screenX + CELL_SIZE / 2 - 0.5, screenY + 8, 1, 12);
+                
+                offscreenCtx.fillStyle = 'rgb(255, 0, 0)';
+                offscreenCtx.beginPath();
+                offscreenCtx.moveTo(screenX + CELL_SIZE / 2 + 1, screenY + 8);
+                offscreenCtx.lineTo(screenX + CELL_SIZE / 2 + 1, screenY + 14);
+                offscreenCtx.lineTo(screenX + CELL_SIZE / 2 + 8, screenY + 11);
+                offscreenCtx.closePath();
+                offscreenCtx.fill();
+            }
+        }
+    }
+    
+    const texture = new Image();
+    texture.src = offscreenCanvas.toDataURL();
+    chunkTextures.set(chunkKey, texture);
+    return texture;
+}
+
+function requestVisibleChunks() {
+    const chunkKeys = [];
+    
+    const buffer = zoom < 0.75 ? 0 : 1;
+    const startChunkX = Math.floor((cameraX - canvas.width / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) - buffer;
+    const endChunkX = Math.floor((cameraX + canvas.width / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) + buffer;
+    const startChunkY = Math.floor((cameraY - canvas.height / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) - buffer;
+    const endChunkY = Math.floor((cameraY + canvas.height / (2 * zoom)) / (CHUNK_SIZE * CELL_SIZE)) + buffer;
+    
+    const maxChunks = 50;
     
     for (let cx = startChunkX; cx <= endChunkX && chunkKeys.length < maxChunks; cx++) {
         for (let cy = startChunkY; cy <= endChunkY && chunkKeys.length < maxChunks; cy++) {
@@ -370,6 +646,56 @@ function updateUI() {
     document.getElementById('score').textContent = `Score: ${player ? player.score : 0}`;
     document.getElementById('playerCount').textContent = `Players: ${players.size}`;
 }
+
+function updateLeaderboard(leaderboardData) {
+    const content = document.getElementById('leaderboardContent');
+    if (!leaderboardData || leaderboardData.length === 0) {
+        content.innerHTML = '<div style="text-align: center; color: rgb(128, 128, 128);">No players</div>';
+        return;
+    }
+    
+    const yourRank = leaderboardData.findIndex(p => p.id === playerId);
+    const lines = [];
+    
+    const top10 = leaderboardData.slice(0, 10);
+    for (let i = 0; i < top10.length; i++) {
+        const isYou = top10[i].id === playerId;
+        const className = isYou ? 'leaderboard-entry you' : 'leaderboard-entry';
+        const youText = isYou ? ' (you)' : '';
+        lines.push(`<div class="${className}">${i + 1}. ${top10[i].score} points${youText}</div>`);
+    }
+    
+    if (yourRank >= 10) {
+        lines.push('<div class="leaderboard-ellipsis">...</div>');
+        
+        const contextStart = Math.max(10, yourRank - 1);
+        const contextEnd = Math.min(leaderboardData.length, yourRank + 2);
+        
+        for (let i = contextStart; i < contextEnd; i++) {
+            const isYou = i === yourRank;
+            const className = isYou ? 'leaderboard-entry you' : 'leaderboard-entry';
+            const youText = isYou ? ' (you)' : '';
+            lines.push(`<div class="${className}">${i + 1}. ${leaderboardData[i].score} points${youText}</div>`);
+        }
+    }
+    
+    content.innerHTML = lines.join('');
+}
+
+function toggleLeaderboard() {
+    const content = document.getElementById('leaderboardContent');
+    const header = document.getElementById('leaderboardHeader');
+    
+    if (content.classList.contains('hidden')) {
+        content.classList.remove('hidden');
+        header.textContent = '▼ Leaderboard';
+    } else {
+        content.classList.add('hidden');
+        header.textContent = '▶ Leaderboard';
+    }
+}
+
+window.toggleLeaderboard = toggleLeaderboard;
 
 function updatePlayerCells() {
     playerCells.clear();
@@ -404,17 +730,199 @@ function render() {
     const offsetX = canvas.width / 2 - cameraX * zoom;
     const offsetY = canvas.height / 2 - cameraY * zoom;
     
-    const numberColors = [
-        null,
-        'rgb(0, 0, 255)',
-        'rgb(0, 128, 0)',
-        'rgb(255, 0, 0)',
-        'rgb(0, 0, 128)',
-        'rgb(128, 0, 0)',
-        'rgb(0, 128, 128)',
-        'rgb(0, 0, 0)',
-        'rgb(128, 128, 128)'
-    ];
+    const simplifiedRendering = scaledCellSize < 16;
+    
+    if (!gridPattern) {
+        gridPattern = ctx.createPattern(gridPatternCanvas, 'repeat');
+    }
+    
+    ctx.save();
+    ctx.translate(offsetX % (CELL_SIZE * zoom), offsetY % (CELL_SIZE * zoom));
+    ctx.scale(zoom, zoom);
+    ctx.fillStyle = gridPattern;
+    ctx.fillRect(
+        -CELL_SIZE * 2,
+        -CELL_SIZE * 2,
+        (canvas.width / zoom) + CELL_SIZE * 4,
+        (canvas.height / zoom) + CELL_SIZE * 4
+    );
+    ctx.restore();
+    
+    for (const chunk of chunks.values()) {
+        for (const cell of chunk.cells) {
+            const screenX = cell.x * scaledCellSize + offsetX;
+            const screenY = cell.y * scaledCellSize + offsetY;
+            
+            if (screenX + scaledCellSize < 0 || screenX > canvas.width ||
+                screenY + scaledCellSize < 0 || screenY > canvas.height) {
+                continue;
+            }
+            
+            if (scaledCellSize < 3) continue;
+            
+            if (cell.state === 'uncovered') {
+                renderUncoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering);
+            } else if (cell.flag || isAdjacentToPlayerCell(cell.x, cell.y)) {
+                renderCoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering);
+            }
+        }
+    }
+    
+    if (!simplifiedRendering) {
+        const hoverCellX = Math.floor((mouseWorldX) / CELL_SIZE);
+        const hoverCellY = Math.floor((mouseWorldY) / CELL_SIZE);
+        const hoverScreenX = hoverCellX * scaledCellSize + offsetX;
+        const hoverScreenY = hoverCellY * scaledCellSize + offsetY;
+        
+        ctx.strokeStyle = 'rgb(255, 255, 0)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(hoverScreenX + 1, hoverScreenY + 1, scaledCellSize - 2, scaledCellSize - 2);
+    }
+}
+
+function renderUncoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering) {
+    const cellKey = `${cell.x},${cell.y}`;
+    let isDeadCell = false;
+    let isMineCell = false;
+    
+    for (const [deadPlayerId, deadData] of deadPlayerCells.entries()) {
+        if (deadData.cells.has(cellKey)) {
+            isDeadCell = true;
+            if (deadData.mineCell && cell.x === deadData.mineCell.x && cell.y === deadData.mineCell.y) {
+                isMineCell = true;
+            }
+            break;
+        }
+    }
+    
+    ctx.fillStyle = 'rgb(192, 192, 192)';
+    ctx.fillRect(screenX, screenY, scaledCellSize, scaledCellSize);
+    
+    if (!simplifiedRendering) {
+        ctx.strokeStyle = 'rgb(128, 128, 128)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(screenX, screenY + scaledCellSize - 0.5);
+        ctx.lineTo(screenX, screenY);
+        ctx.lineTo(screenX + scaledCellSize - 0.5, screenY);
+        ctx.stroke();
+    }
+    
+    if (cell.owner && !isDeadCell) {
+        const owner = players.get(cell.owner);
+        if (owner) {
+            ctx.fillStyle = owner.color;
+            ctx.globalAlpha = simplifiedRendering ? 0.3 : 0.12;
+            ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
+            ctx.globalAlpha = 1.0;
+        }
+    } else if (isDeadCell) {
+        ctx.fillStyle = 'rgb(100, 100, 100)';
+        ctx.globalAlpha = 0.3;
+        ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
+        ctx.globalAlpha = 1.0;
+    }
+    
+    if ((cell.isMine || isMineCell) && !simplifiedRendering) {
+        const mineRadius = 5 * zoom;
+        const centerX = screenX + scaledCellSize / 2;
+        const centerY = screenY + scaledCellSize / 2;
+        
+        ctx.fillStyle = 'rgb(0, 0, 0)';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, mineRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.strokeStyle = 'rgb(0, 0, 0)';
+        ctx.lineWidth = 2 * zoom;
+        for (let i = 0; i < 8; i++) {
+            const angle = (i * Math.PI) / 4;
+            const x1 = centerX + Math.cos(angle) * mineRadius * 0.7;
+            const y1 = centerY + Math.sin(angle) * mineRadius * 0.7;
+            const x2 = centerX + Math.cos(angle) * (mineRadius + 6 * zoom);
+            const y2 = centerY + Math.sin(angle) * (mineRadius + 6 * zoom);
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+        }
+        
+        ctx.fillStyle = 'rgb(255, 255, 255)';
+        ctx.beginPath();
+        ctx.arc(centerX - 2 * zoom, centerY - 2 * zoom, 2 * zoom, 0, Math.PI * 2);
+        ctx.fill();
+    } else if ((cell.isMine || isMineCell) && simplifiedRendering) {
+        ctx.fillStyle = 'rgb(0, 0, 0)';
+        ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
+    } else if (cell.adjacentMines > 0 && !simplifiedRendering && !isDeadCell && cell.owner === playerId) {
+        const numberColors = [
+            null,
+            'rgb(0, 0, 255)',
+            'rgb(0, 128, 0)',
+            'rgb(255, 0, 0)',
+            'rgb(0, 0, 128)',
+            'rgb(128, 0, 0)',
+            'rgb(0, 128, 128)',
+            'rgb(0, 0, 0)',
+            'rgb(128, 128, 128)'
+        ];
+        ctx.fillStyle = numberColors[cell.adjacentMines];
+        ctx.font = `bold ${16 * zoom}px "MS Sans Serif", "Microsoft Sans Serif", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(cell.adjacentMines, screenX + scaledCellSize / 2, screenY + scaledCellSize / 2);
+    }
+}
+
+function renderCoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering) {
+    const canClick = isAdjacentToPlayerCell(cell.x, cell.y) && !isDead;
+    
+    if (canClick) {
+        ctx.fillStyle = 'rgb(192, 192, 192)';
+        ctx.fillRect(screenX, screenY, scaledCellSize, scaledCellSize);
+        
+        if (!simplifiedRendering) {
+            ctx.strokeStyle = 'rgb(255, 255, 255)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(screenX + 1, screenY + scaledCellSize - 1);
+            ctx.lineTo(screenX + 1, screenY + 1);
+            ctx.lineTo(screenX + scaledCellSize - 1, screenY + 1);
+            ctx.stroke();
+            
+            ctx.strokeStyle = 'rgb(128, 128, 128)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(screenX + scaledCellSize - 1, screenY + 1);
+            ctx.lineTo(screenX + scaledCellSize - 1, screenY + scaledCellSize - 1);
+            ctx.lineTo(screenX + 1, screenY + scaledCellSize - 1);
+            ctx.stroke();
+        }
+    }
+    
+    if (cell.flag) {
+        if (!simplifiedRendering) {
+            ctx.fillStyle = 'rgb(0, 0, 0)';
+            ctx.fillRect(screenX + scaledCellSize / 2 - 0.5 * zoom, screenY + 8 * zoom, 1 * zoom, 12 * zoom);
+            
+            ctx.fillStyle = 'rgb(255, 0, 0)';
+            ctx.beginPath();
+            ctx.moveTo(screenX + scaledCellSize / 2 + 1 * zoom, screenY + 8 * zoom);
+            ctx.lineTo(screenX + scaledCellSize / 2 + 1 * zoom, screenY + 14 * zoom);
+            ctx.lineTo(screenX + scaledCellSize / 2 + 8 * zoom, screenY + 11 * zoom);
+            ctx.closePath();
+            ctx.fill();
+        } else {
+            ctx.fillStyle = 'rgb(255, 0, 0)';
+            ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
+        }
+    }
+}
+
+function renderCellByCell() {
+    const scaledCellSize = CELL_SIZE * zoom;
+    const offsetX = canvas.width / 2 - cameraX * zoom;
+    const offsetY = canvas.height / 2 - cameraY * zoom;
     
     const simplifiedRendering = scaledCellSize < 16;
     
@@ -430,151 +938,12 @@ function render() {
             
             if (scaledCellSize < 3) continue;
             
-            const cellKey = `${cell.x},${cell.y}`;
-            let isDeadCell = false;
-            let isMineCell = false;
-            
-            for (const [deadPlayerId, deadData] of deadPlayerCells.entries()) {
-                if (deadData.cells.has(cellKey)) {
-                    isDeadCell = true;
-                    if (deadData.mineCell && cell.x === deadData.mineCell.x && cell.y === deadData.mineCell.y) {
-                        isMineCell = true;
-                    }
-                    break;
-                }
-            }
-            
             if (cell.state === 'uncovered') {
-                ctx.fillStyle = 'rgb(192, 192, 192)';
-                ctx.fillRect(screenX, screenY, scaledCellSize, scaledCellSize);
-                
-                if (!simplifiedRendering) {
-                    ctx.strokeStyle = 'rgb(128, 128, 128)';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(screenX, screenY + scaledCellSize - 0.5);
-                    ctx.lineTo(screenX, screenY);
-                    ctx.lineTo(screenX + scaledCellSize - 0.5, screenY);
-                    ctx.stroke();
-                }
-                
-                if (cell.owner && !isDeadCell) {
-                    const owner = players.get(cell.owner);
-                    if (owner) {
-                        ctx.fillStyle = owner.color;
-                        ctx.globalAlpha = simplifiedRendering ? 0.3 : 0.12;
-                        ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
-                        ctx.globalAlpha = 1.0;
-                    }
-                } else if (isDeadCell) {
-                    ctx.fillStyle = 'rgb(100, 100, 100)';
-                    ctx.globalAlpha = 0.3;
-                    ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
-                    ctx.globalAlpha = 1.0;
-                }
-                
-                if ((cell.isMine || isMineCell) && !simplifiedRendering) {
-                    const mineRadius = 5 * zoom;
-                    const centerX = screenX + scaledCellSize / 2;
-                    const centerY = screenY + scaledCellSize / 2;
-                    
-                    ctx.fillStyle = 'rgb(0, 0, 0)';
-                    ctx.beginPath();
-                    ctx.arc(centerX, centerY, mineRadius, 0, Math.PI * 2);
-                    ctx.fill();
-                    
-                    ctx.strokeStyle = 'rgb(0, 0, 0)';
-                    ctx.lineWidth = 2 * zoom;
-                    for (let i = 0; i < 8; i++) {
-                        const angle = (i * Math.PI) / 4;
-                        const x1 = centerX + Math.cos(angle) * mineRadius * 0.7;
-                        const y1 = centerY + Math.sin(angle) * mineRadius * 0.7;
-                        const x2 = centerX + Math.cos(angle) * (mineRadius + 6 * zoom);
-                        const y2 = centerY + Math.sin(angle) * (mineRadius + 6 * zoom);
-                        ctx.beginPath();
-                        ctx.moveTo(x1, y1);
-                        ctx.lineTo(x2, y2);
-                        ctx.stroke();
-                    }
-                    
-                    ctx.fillStyle = 'rgb(255, 255, 255)';
-                    ctx.beginPath();
-                    ctx.arc(centerX - 2 * zoom, centerY - 2 * zoom, 2 * zoom, 0, Math.PI * 2);
-                    ctx.fill();
-                } else if ((cell.isMine || isMineCell) && simplifiedRendering) {
-                    ctx.fillStyle = 'rgb(0, 0, 0)';
-                    ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
-                } else if (cell.adjacentMines > 0 && !simplifiedRendering && !isDeadCell && cell.owner === playerId) {
-                    ctx.fillStyle = numberColors[cell.adjacentMines];
-                    ctx.font = `bold ${16 * zoom}px "MS Sans Serif", "Microsoft Sans Serif", sans-serif`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(cell.adjacentMines, screenX + scaledCellSize / 2, screenY + scaledCellSize / 2);
-                }
-            } else {
-                const canClick = isAdjacentToPlayerCell(cell.x, cell.y) && !isDead;
-                
-                if (canClick) {
-                    ctx.fillStyle = 'rgb(192, 192, 192)';
-                } else {
-                    ctx.fillStyle = 'rgb(128, 128, 128)';
-                }
-                ctx.fillRect(screenX, screenY, scaledCellSize, scaledCellSize);
-                
-                if (!simplifiedRendering) {
-                    if (canClick) {
-                        ctx.strokeStyle = 'rgb(255, 255, 255)';
-                    } else {
-                        ctx.strokeStyle = 'rgb(160, 160, 160)';
-                    }
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.moveTo(screenX + 1, screenY + scaledCellSize - 1);
-                    ctx.lineTo(screenX + 1, screenY + 1);
-                    ctx.lineTo(screenX + scaledCellSize - 1, screenY + 1);
-                    ctx.stroke();
-                    
-                    if (canClick) {
-                        ctx.strokeStyle = 'rgb(128, 128, 128)';
-                    } else {
-                        ctx.strokeStyle = 'rgb(80, 80, 80)';
-                    }
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.moveTo(screenX + scaledCellSize - 1, screenY + 1);
-                    ctx.lineTo(screenX + scaledCellSize - 1, screenY + scaledCellSize - 1);
-                    ctx.lineTo(screenX + 1, screenY + scaledCellSize - 1);
-                    ctx.stroke();
-                    
-                    if (cell.flag) {
-                        ctx.fillStyle = 'rgb(0, 0, 0)';
-                        ctx.fillRect(screenX + scaledCellSize / 2 - 0.5 * zoom, screenY + 8 * zoom, 1 * zoom, 12 * zoom);
-                        
-                        ctx.fillStyle = 'rgb(255, 0, 0)';
-                        ctx.beginPath();
-                        ctx.moveTo(screenX + scaledCellSize / 2 + 1 * zoom, screenY + 8 * zoom);
-                        ctx.lineTo(screenX + scaledCellSize / 2 + 1 * zoom, screenY + 14 * zoom);
-                        ctx.lineTo(screenX + scaledCellSize / 2 + 8 * zoom, screenY + 11 * zoom);
-                        ctx.closePath();
-                        ctx.fill();
-                    }
-                } else if (cell.flag) {
-                    ctx.fillStyle = 'rgb(255, 0, 0)';
-                    ctx.fillRect(screenX + 1, screenY + 1, scaledCellSize - 2, scaledCellSize - 2);
-                }
+                renderUncoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering);
+            } else if (cell.flag) {
+                renderCoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering);
             }
         }
-    }
-    
-    if (!simplifiedRendering) {
-        const hoverCellX = Math.floor((mouseWorldX) / CELL_SIZE);
-        const hoverCellY = Math.floor((mouseWorldY) / CELL_SIZE);
-        const hoverScreenX = hoverCellX * scaledCellSize + offsetX;
-        const hoverScreenY = hoverCellY * scaledCellSize + offsetY;
-        
-        ctx.strokeStyle = 'rgb(255, 255, 0)';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(hoverScreenX + 1, hoverScreenY + 1, scaledCellSize - 2, scaledCellSize - 2);
     }
 }
 
@@ -678,10 +1047,28 @@ canvas.addEventListener('mouseup', (e) => {
             const cellX = Math.floor(mouseWorldX / CELL_SIZE);
             const cellY = Math.floor(mouseWorldY / CELL_SIZE);
             
-            console.log('Clicking cell:', cellX, cellY);
-            socket.emit('move', { x: cellX, y: cellY });
+            const now = Date.now();
+            const cellKey = `${cellX},${cellY}`;
+            
+            if (now - lastClickTime < 300 && lastClickCell === cellKey) {
+                console.log('Double clicking cell:', cellX, cellY);
+                socket.emit('chord', { x: cellX, y: cellY });
+                lastClickTime = 0;
+                lastClickCell = null;
+            } else {
+                console.log('Clicking cell:', cellX, cellY);
+                socket.emit('move', { x: cellX, y: cellY });
+                lastClickTime = now;
+                lastClickCell = cellKey;
+            }
         }
     } else if (e.button === 1) {
+        if (!isDead) {
+            const cellX = Math.floor(mouseWorldX / CELL_SIZE);
+            const cellY = Math.floor(mouseWorldY / CELL_SIZE);
+            console.log('Middle clicking cell (chord):', cellX, cellY);
+            socket.emit('chord', { x: cellX, y: cellY });
+        }
         isPanning = false;
         e.preventDefault();
     }
@@ -703,11 +1090,201 @@ canvas.addEventListener('contextmenu', (e) => {
 });
 
 let lastChunkRequest = Date.now();
+let lastCleanup = Date.now();
+
 setInterval(() => {
-    if (Date.now() - lastChunkRequest > 500) {
+    const cameraMoved = Math.abs(cameraX - lastCameraX) > CELL_SIZE * 2 || 
+                       Math.abs(cameraY - lastCameraY) > CELL_SIZE * 2 ||
+                       Math.abs(zoom - lastZoom) > 0.1;
+    
+    if (cameraMoved || Date.now() - lastChunkRequest > 2000) {
         requestVisibleChunks();
         lastChunkRequest = Date.now();
+        lastCameraX = cameraX;
+        lastCameraY = cameraY;
+        lastZoom = zoom;
     }
-}, 500);
+    
+    if (Date.now() - lastCleanup > 5000) {
+        cleanupDistantChunks();
+        lastCleanup = Date.now();
+    }
+}, 200);
+
+let touches = [];
+let lastTouchDistance = 0;
+let touchStartTime = 0;
+let touchMoved = false;
+let longPressTimer = null;
+let lastTouchCenterX = 0;
+let lastTouchCenterY = 0;
+let lastTapTime = 0;
+let lastTapCell = null;
+let lastClickTime = 0;
+let lastClickCell = null;
+
+canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    touches = Array.from(e.touches);
+    touchMoved = false;
+    
+    if (touches.length === 2) {
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
+        
+        const rect = canvas.getBoundingClientRect();
+        lastTouchCenterX = (touches[0].clientX + touches[1].clientX) / 2 - rect.left;
+        lastTouchCenterY = (touches[0].clientY + touches[1].clientY) / 2 - rect.top;
+        
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+    } else if (touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        isPanning = true;
+        panStartX = touches[0].clientX - rect.left;
+        panStartY = touches[0].clientY - rect.top;
+        touchStartTime = Date.now();
+        
+        const worldX = (panStartX - canvas.width / 2) / zoom + cameraX;
+        const worldY = (panStartY - canvas.height / 2) / zoom + cameraY;
+        const cellX = Math.floor(worldX / CELL_SIZE);
+        const cellY = Math.floor(worldY / CELL_SIZE);
+        
+        longPressTimer = setTimeout(() => {
+            if (!touchMoved && !isDead) {
+                socket.emit('flag', { x: cellX, y: cellY });
+                longPressTimer = null;
+                navigator.vibrate && navigator.vibrate(50);
+            }
+        }, 500);
+    }
+});
+
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    touches = Array.from(e.touches);
+    const rect = canvas.getBoundingClientRect();
+    
+    if (touches.length === 2) {
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        const centerX = (touches[0].clientX + touches[1].clientX) / 2 - rect.left;
+        const centerY = (touches[0].clientY + touches[1].clientY) / 2 - rect.top;
+        
+        if (lastTouchDistance > 0) {
+            const worldXBefore = (centerX - canvas.width / 2) / zoom + cameraX;
+            const worldYBefore = (centerY - canvas.height / 2) / zoom + cameraY;
+            
+            const zoomFactor = distance / lastTouchDistance;
+            zoom = Math.max(0.5, Math.min(3, zoom * zoomFactor));
+            
+            const worldXAfter = (centerX - canvas.width / 2) / zoom + cameraX;
+            const worldYAfter = (centerY - canvas.height / 2) / zoom + cameraY;
+            
+            cameraX += worldXBefore - worldXAfter;
+            cameraY += worldYBefore - worldYAfter;
+            
+            const deltaX = centerX - lastTouchCenterX;
+            const deltaY = centerY - lastTouchCenterY;
+            cameraX -= deltaX / zoom;
+            cameraY -= deltaY / zoom;
+        }
+        
+        lastTouchDistance = distance;
+        lastTouchCenterX = centerX;
+        lastTouchCenterY = centerY;
+        touchMoved = true;
+        
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+    } else if (touches.length === 1 && isPanning) {
+        const mouseX = touches[0].clientX - rect.left;
+        const mouseY = touches[0].clientY - rect.top;
+        const deltaX = mouseX - panStartX;
+        const deltaY = mouseY - panStartY;
+        
+        if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+            touchMoved = true;
+            if (longPressTimer) {
+                clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
+        }
+        
+        cameraX -= deltaX / zoom;
+        cameraY -= deltaY / zoom;
+        panStartX = mouseX;
+        panStartY = mouseY;
+    }
+});
+
+canvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    
+    if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    }
+    
+    if (touches.length === 1 && !touchMoved && !isDead) {
+        const elapsed = Date.now() - touchStartTime;
+        if (elapsed < 500) {
+            const rect = canvas.getBoundingClientRect();
+            const worldX = (panStartX - canvas.width / 2) / zoom + cameraX;
+            const worldY = (panStartY - canvas.height / 2) / zoom + cameraY;
+            const cellX = Math.floor(worldX / CELL_SIZE);
+            const cellY = Math.floor(worldY / CELL_SIZE);
+            
+            const now = Date.now();
+            const cellKey = `${cellX},${cellY}`;
+            
+            if (now - lastTapTime < 300 && lastTapCell === cellKey) {
+                console.log('Double tapping cell:', cellX, cellY);
+                socket.emit('chord', { x: cellX, y: cellY });
+                lastTapTime = 0;
+                lastTapCell = null;
+            } else {
+                console.log('Tapping cell:', cellX, cellY);
+                socket.emit('move', { x: cellX, y: cellY });
+                lastTapTime = now;
+                lastTapCell = cellKey;
+            }
+        }
+    }
+    
+    touches = Array.from(e.touches);
+    
+    if (touches.length < 2) {
+        lastTouchDistance = 0;
+    }
+    
+    if (touches.length === 0) {
+        isPanning = false;
+        touchMoved = false;
+    } else if (touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        panStartX = touches[0].clientX - rect.left;
+        panStartY = touches[0].clientY - rect.top;
+    }
+});
+
+canvas.addEventListener('touchcancel', (e) => {
+    e.preventDefault();
+    if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    }
+    touches = [];
+    lastTouchDistance = 0;
+    isPanning = false;
+    touchMoved = false;
+});
 
 gameLoop();

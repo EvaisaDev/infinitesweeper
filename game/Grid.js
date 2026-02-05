@@ -7,6 +7,7 @@ class Grid {
         this.cellStates = new Map();
         this.cellOwners = new Map();
         this.cellFlags = new Map();
+        this.generation = 0;
         console.log('Grid initialized - all data cleared');
     }
     
@@ -28,7 +29,7 @@ class Grid {
     }
     
     seededRandom(x, y) {
-        const seed = x * 374761393 + y * 668265263;
+        const seed = x * 374761393 + y * 668265263 + this.generation * 982451653;
         let value = Math.abs(Math.sin(seed) * 43758.5453123);
         return value - Math.floor(value);
     }
@@ -203,15 +204,34 @@ class Grid {
     
     clearPlayerCells(playerId, immediate = false) {
         const cellsToReset = [];
+        const flagsToRemove = [];
         
         for (const [key, owner] of this.cellOwners.entries()) {
             if (owner === playerId) {
                 const [x, y] = key.split(',').map(Number);
                 cellsToReset.push({ x, y });
+                
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        if (dx === 0 && dy === 0) continue;
+                        const adjKey = this.getCellKey(x + dx, y + dy);
+                        if (this.cellFlags.get(adjKey)) {
+                            const [fx, fy] = adjKey.split(',').map(Number);
+                            flagsToRemove.push({ x: fx, y: fy });
+                        }
+                    }
+                }
             }
         }
         
-        return cellsToReset;
+        for (const flag of flagsToRemove) {
+            const flagKey = this.getCellKey(flag.x, flag.y);
+            this.cellFlags.delete(flagKey);
+            const { chunkX, chunkY } = this.worldToChunk(flag.x, flag.y);
+            this.chunks.delete(this.getChunkKey(chunkX, chunkY));
+        }
+        
+        return { cellsToReset, flagsToRemove };
     }
     
     recoverCell(x, y) {
@@ -219,6 +239,8 @@ class Grid {
         this.cellOwners.delete(cellKey);
         this.cellStates.delete(cellKey);
         this.cellFlags.delete(cellKey);
+        
+        this.generation++;
         
         const { chunkX, chunkY } = this.worldToChunk(x, y);
         this.chunks.delete(this.getChunkKey(chunkX, chunkY));

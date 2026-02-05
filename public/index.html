@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Infinite Sweeper</title>
     <style>
         * {
@@ -67,6 +67,65 @@
             font-family: 'Courier New', monospace;
             min-width: 100px;
             text-align: center;
+        }
+        
+        #leaderboard {
+            position: fixed;
+            top: 50px;
+            right: 10px;
+            background-color: rgb(192, 192, 192);
+            border-width: 2px;
+            border-style: solid;
+            border-color: rgb(255, 255, 255) rgb(0, 0, 0) rgb(0, 0, 0) rgb(255, 255, 255);
+            z-index: 100;
+            min-width: 200px;
+            box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        
+        #leaderboardHeader {
+            background: linear-gradient(to right, rgb(11, 36, 106), rgb(166, 202, 240));
+            color: rgb(255, 255, 255);
+            padding: 2px 4px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            user-select: none;
+        }
+        
+        #leaderboardContent {
+            background-color: rgb(192, 192, 192);
+            padding: 8px;
+            font-size: 13px;
+            font-family: 'Courier New', monospace;
+            max-height: 300px;
+            overflow-y: auto;
+            border-width: 2px;
+            border-style: solid;
+            border-color: rgb(128, 128, 128) rgb(255, 255, 255) rgb(255, 255, 255) rgb(128, 128, 128);
+            margin: 2px;
+        }
+        
+        #leaderboardContent.hidden {
+            display: none;
+        }
+        
+        .leaderboard-entry {
+            padding: 3px 0;
+            white-space: nowrap;
+        }
+        
+        .leaderboard-entry.you {
+            font-weight: bold;
+            color: rgb(0, 0, 128);
+        }
+        
+        .leaderboard-ellipsis {
+            text-align: center;
+            color: rgb(128, 128, 128);
+            padding: 2px 0;
         }
         
         #canvas {
@@ -155,6 +214,11 @@
         <div id="playerCount">Players: 0</div>
     </div>
     
+    <div id="leaderboard">
+        <div id="leaderboardHeader" onclick="toggleLeaderboard()">▼ Leaderboard</div>
+        <div id="leaderboardContent"></div>
+    </div>
+    
     <canvas id="canvas"></canvas>
     
     <div id="deathScreen">
@@ -171,11 +235,33 @@
         </div>
     </div>
     
+    <div id="adminPopup" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0, 0, 0, 0.3); z-index: 300; justify-content: center; align-items: center;">
+        <div class="death-window" style="min-width: 400px; max-width: 500px;">
+            <div class="death-header">
+                <span id="adminPopupTitle">Server Message</span>
+            </div>
+            <div class="death-content">
+                <p id="adminPopupText" style="margin-bottom: 15px; white-space: pre-wrap;"></p>
+                <button onclick="closeAdminPopup()" style="background-color: rgb(192, 192, 192); border-width: 2px; border-style: solid; border-color: rgb(255, 255, 255) rgb(0, 0, 0) rgb(0, 0, 0) rgb(255, 255, 255); padding: 4px 12px; font-family: 'MS Sans Serif', 'Microsoft Sans Serif', sans-serif; font-size: 11px; font-weight: bold; cursor: pointer;">OK</button>
+            </div>
+        </div>
+    </div>
+    
     <div id="instructions">
-        Left Click: Uncover | Right Click: Flag | WASD/Arrow Keys: Move Camera
+        <span id="desktopInstructions">Left Click: Uncover | Right Click: Flag | WASD/Arrow Keys: Move Camera</span>
+        <span id="mobileInstructions" style="display: none;">Tap: Uncover | Hold: Flag | Drag: Pan | Pinch: Zoom</span>
     </div>
     
     <script src="/socket.io/socket.io.js"></script>
     <script src="game.js"></script>
+    <script>
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) 
+                      || (navigator.maxTouchPoints > 2 && window.innerWidth < 1024);
+        
+        if (isMobile) {
+            document.getElementById('desktopInstructions').style.display = 'none';
+            document.getElementById('mobileInstructions').style.display = 'inline';
+        }
+    </script>
 </body>
 </html>
