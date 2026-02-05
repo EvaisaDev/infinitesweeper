@@ -7,7 +7,7 @@ class Grid {
         this.cellStates = new Map();
         this.cellOwners = new Map();
         this.cellFlags = new Map();
-        this.generation = 0;
+        this.cellSeeds = new Map();
         console.log('Grid initialized - all data cleared');
     }
     
@@ -29,7 +29,10 @@ class Grid {
     }
     
     seededRandom(x, y) {
-        const seed = x * 374761393 + y * 668265263 + this.generation * 982451653;
+        const cellKey = this.getCellKey(x, y);
+        const cellSeed = this.cellSeeds.get(cellKey);
+        const seedOffset = cellSeed !== undefined ? cellSeed : 0;
+        const seed = x * 374761393 + y * 668265263 + seedOffset * 982451653;
         let value = Math.abs(Math.sin(seed) * 43758.5453123);
         return value - Math.floor(value);
     }
@@ -240,10 +243,11 @@ class Grid {
         this.cellStates.delete(cellKey);
         this.cellFlags.delete(cellKey);
         
-        this.generation++;
-        
         const { chunkX, chunkY } = this.worldToChunk(x, y);
-        this.chunks.delete(this.getChunkKey(chunkX, chunkY));
+        const chunkKey = this.getChunkKey(chunkX, chunkY);
+        const newSeed = Math.floor(Math.random() * 1000000000);
+        this.cellSeeds.set(cellKey, newSeed);
+        this.chunks.delete(chunkKey);
         
         return true;
     }

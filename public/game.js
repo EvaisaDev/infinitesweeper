@@ -33,6 +33,8 @@ let offscreenCtx = offscreenCanvas.getContext('2d', { alpha: true });
 offscreenCanvas.width = CHUNK_SIZE * CELL_SIZE;
 offscreenCanvas.height = CHUNK_SIZE * CELL_SIZE;
 
+let dirtyChunks = new Set();
+
 let gridPattern = null;
 let gridPatternCanvas = document.createElement('canvas');
 gridPatternCanvas.width = CELL_SIZE;
@@ -99,12 +101,14 @@ socket.on('playerLeft', (id) => {
 socket.on('cellsCleared', (data) => {
     console.log('Cells cleared, refreshing chunks');
     if (data.cells && data.cells.length > 0) {
+        markDirtyChunksForCells(data.cells);
         requestChunksForCells(data.cells);
     }
 });
 
 socket.on('flagsRemoved', (data) => {
     if (data.flags && data.flags.length > 0) {
+        markDirtyChunksForCells(data.flags);
         requestChunksForCells(data.flags);
     }
 });
@@ -119,7 +123,9 @@ socket.on('gameUpdate', (data) => {
             if (data.type === 'death') {
                 isDead = true;
                 deathTime = Date.now();
+                lastDeathScore = data.finalScore !== undefined ? data.finalScore : player.score;
             } else if (data.type === 'noMoves') {
+                lastDeathScore = data.finalScore !== undefined ? data.finalScore : player.score;
                 handleDeath('No more moves available!');
             }
         }
@@ -139,6 +145,7 @@ socket.on('gameUpdate', (data) => {
         }
         
         if (data.uncoveredCells && data.uncoveredCells.length > 0) {
+            markDirtyChunksForCells(data.uncoveredCells);
             requestChunksForCells(data.uncoveredCells);
         }
         
@@ -154,6 +161,7 @@ socket.on('gameUpdate', (data) => {
             player.alive = true;
             isDead = false;
             deathTime = null;
+            lastDeathScore = null;
             
             cameraX = player.x * CELL_SIZE;
             cameraY = player.y * CELL_SIZE;
@@ -169,6 +177,7 @@ socket.on('gameUpdate', (data) => {
         }
         
         if (data.uncoveredCells && data.uncoveredCells.length > 0) {
+            markDirtyChunksForCells(data.uncoveredCells);
             requestChunksForCells(data.uncoveredCells);
         }
         
@@ -188,6 +197,7 @@ socket.on('gameUpdate', (data) => {
             }
             
             if (update.uncoveredCells && update.uncoveredCells.length > 0) {
+                markDirtyChunksForCells(update.uncoveredCells);
                 requestChunksForCells(update.uncoveredCells);
             }
         }
@@ -223,10 +233,19 @@ socket.on('cellRecovered', (data) => {
     }
 });
 
+socket.on('cellsUpdated', (data) => {
+    if (data.cells && data.cells.length > 0) {
+        for (const cell of data.cells) {
+            updateCellData(cell);
+        }
+    }
+});
+
 socket.on('recoveryComplete', (data) => {
     if (data.playerId === playerId) {
         document.getElementById('deathReason').textContent = 'You hit a mine!';
-        document.getElementById('finalScore').textContent = `Final Score: ${player.score}`;
+        const finalScore = lastDeathScore !== null ? lastDeathScore : player.score;
+        document.getElementById('finalScore').textContent = `Final Score: ${finalScore}`;
         document.getElementById('deathScreen').classList.add('show');
         
         const timerInterval = setInterval(() => {
@@ -287,6 +306,10 @@ socket.on('chunks', (chunksData) => {
         
         if (chunkChanged) {
             chunkTextures.delete(key);
+        }
+
+        if (dirtyChunks.has(key)) {
+            dirtyChunks.delete(key);
         }
     }
     updatePlayerCells();
@@ -389,6 +412,36 @@ function updateCellFlag(x, y, flagged) {
     }
 }
 
+function updateCellData(cellData) {
+    const chunkX = Math.floor(cellData.x / CHUNK_SIZE);
+    const chunkY = Math.floor(cellData.y / CHUNK_SIZE);
+    const chunkKey = `${chunkX},${chunkY}`;
+    const chunk = chunks.get(chunkKey);
+    
+    if (!chunk) return;
+    
+    for (const cell of chunk.cells) {
+        if (cell.x === cellData.x && cell.y === cellData.y) {
+            cell.state = cellData.state;
+            cell.owner = cellData.owner || null;
+            cell.flag = cellData.flag || false;
+            cell.isMine = cellData.isMine || false;
+            cell.adjacentMines = cellData.adjacentMines || 0;
+            return;
+        }
+    }
+    
+    chunk.cells.push({
+        x: cellData.x,
+        y: cellData.y,
+        state: cellData.state || 'covered',
+        owner: cellData.owner || null,
+        flag: cellData.flag || false,
+        isMine: cellData.isMine || false,
+        adjacentMines: cellData.adjacentMines || 0
+    });
+}
+
 function invalidateChunksForCells(cells) {
     const chunksToInvalidate = new Set();
     for (const cell of cells) {
@@ -418,11 +471,21 @@ function requestChunksForCells(cells) {
         
         if (visibleChunks.has(chunkKey)) {
             chunkKeys.add(chunkKey);
+        } else {
+            dirtyChunks.add(chunkKey);
         }
     }
     
     if (chunkKeys.size > 0) {
         socket.emit('requestChunks', { chunkKeys: Array.from(chunkKeys) });
+    }
+}
+
+function markDirtyChunksForCells(cells) {
+    for (const cell of cells) {
+        const chunkX = Math.floor(cell.x / CHUNK_SIZE);
+        const chunkY = Math.floor(cell.y / CHUNK_SIZE);
+        dirtyChunks.add(`${chunkX},${chunkY}`);
     }
 }
 
@@ -631,7 +694,7 @@ function requestVisibleChunks() {
     for (let cx = startChunkX; cx <= endChunkX && chunkKeys.length < maxChunks; cx++) {
         for (let cy = startChunkY; cy <= endChunkY && chunkKeys.length < maxChunks; cy++) {
             const key = `${cx},${cy}`;
-            if (!chunks.has(key)) {
+            if (!chunks.has(key) || dirtyChunks.has(key)) {
                 chunkKeys.push(key);
             }
         }
@@ -1122,6 +1185,7 @@ let lastTapTime = 0;
 let lastTapCell = null;
 let lastClickTime = 0;
 let lastClickCell = null;
+let lastDeathScore = null;
 
 canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();

@@ -233,7 +233,9 @@ class Game {
         }
         
         if (hitMine) {
+            const finalScore = player.score;
             player.die();
+            player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
             const clearResult = this.grid.clearPlayerCells(playerId);
@@ -257,7 +259,9 @@ class Game {
                     playerId: playerId,
                     mineCell: mineCell,
                     playerCells: playerCells,
-                    uncoveredCells: allUncoveredCells
+                    uncoveredCells: allUncoveredCells,
+                    score: player.score,
+                    finalScore: finalScore
                 }
             };
         }
@@ -265,7 +269,9 @@ class Game {
         player.score += allUncoveredCells.length;
         
         if (!this.hasValidMoves(playerId)) {
+            const finalScore = player.score;
             player.die();
+            player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
             const clearResult = this.grid.clearPlayerCells(playerId);
@@ -282,7 +288,8 @@ class Game {
                     playerId: playerId,
                     playerCells: playerCells,
                     uncoveredCells: allUncoveredCells,
-                    score: player.score
+                    score: player.score,
+                    finalScore: finalScore
                 }
             };
         }
@@ -322,7 +329,9 @@ class Game {
         }
         
         if (result.isMine) {
+            const finalScore = player.score;
             player.die();
+            player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
             const clearResult = this.grid.clearPlayerCells(playerId);
@@ -346,7 +355,9 @@ class Game {
                     playerId: playerId,
                     mineCell: { x, y },
                     playerCells: playerCells,
-                    uncoveredCells: result.uncoveredCells
+                    uncoveredCells: result.uncoveredCells,
+                    score: player.score,
+                    finalScore: finalScore
                 }
             };
         }
@@ -354,7 +365,9 @@ class Game {
         player.addScore(result.uncoveredCells.length);
         
         if (!this.hasValidMoves(playerId)) {
+            const finalScore = player.score;
             player.die();
+            player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
             return {
@@ -363,7 +376,8 @@ class Game {
                     type: 'noMoves',
                     playerId: playerId,
                     uncoveredCells: result.uncoveredCells,
-                    score: player.score
+                    score: player.score,
+                    finalScore: finalScore
                 }
             };
         }
@@ -393,6 +407,27 @@ class Game {
             
             const cell = cells[index];
             this.grid.recoverCell(cell.x, cell.y);
+            
+            if (this.io) {
+                const updatedCells = [];
+                const seen = new Set();
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        if (dx === 0 && dy === 0) continue;
+                        const adjCell = this.grid.getCell(cell.x + dx, cell.y + dy);
+                        if (adjCell.state === 'uncovered') {
+                            const key = `${adjCell.x},${adjCell.y}`;
+                            if (!seen.has(key)) {
+                                seen.add(key);
+                                updatedCells.push(adjCell);
+                            }
+                        }
+                    }
+                }
+                if (updatedCells.length > 0) {
+                    this.io.emit('cellsUpdated', { cells: updatedCells });
+                }
+            }
             
             if (this.io) {
                 this.io.emit('cellRecovered', { 
