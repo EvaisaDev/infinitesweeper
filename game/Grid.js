@@ -1,5 +1,5 @@
 const CHUNK_SIZE = 16;
-const MINE_PROBABILITY = 0.15;
+const MINE_PROBABILITY = 0.25;
 
 class Grid {
     constructor() {
@@ -39,12 +39,6 @@ class Grid {
     
     isMine(x, y) {
         const cellKey = this.getCellKey(x, y);
-        const state = this.cellStates.get(cellKey);
-        
-        if (state === 'uncovered') {
-            return false;
-        }
-        
         return this.seededRandom(x, y) < MINE_PROBABILITY;
     }
     
@@ -243,11 +237,16 @@ class Grid {
         this.cellStates.delete(cellKey);
         this.cellFlags.delete(cellKey);
         
-        const { chunkX, chunkY } = this.worldToChunk(x, y);
-        const chunkKey = this.getChunkKey(chunkX, chunkY);
         const newSeed = Math.floor(Math.random() * 1000000000);
         this.cellSeeds.set(cellKey, newSeed);
-        this.chunks.delete(chunkKey);
+        
+        const { chunkX, chunkY } = this.worldToChunk(x, y);
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const neighborKey = this.getChunkKey(chunkX + dx, chunkY + dy);
+                this.chunks.delete(neighborKey);
+            }
+        }
         
         return true;
     }

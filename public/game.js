@@ -27,6 +27,9 @@ let deadPlayerCells = new Map();
 let lastCameraX = 0;
 let lastCameraY = 0;
 let lastZoom = 1.0;
+let clickStartX = 0;
+let clickStartY = 0;
+let mouseDragged = false;
 let chunkTextures = new Map();
 let offscreenCanvas = document.createElement('canvas');
 let offscreenCtx = offscreenCanvas.getContext('2d', { alpha: true });
@@ -1056,6 +1059,13 @@ canvas.addEventListener('mousemove', (e) => {
         cameraY -= deltaY / zoom;
         panStartX = mouseX;
         panStartY = mouseY;
+
+        const dragDistance = Math.sqrt(
+            Math.pow(mouseX - clickStartX, 2) + Math.pow(mouseY - clickStartY, 2)
+        );
+        if (dragDistance > dragThreshold) {
+            mouseDragged = true;
+        }
     }
     
     mouseWorldX = (mouseX - canvas.width / 2) / zoom + cameraX;
@@ -1091,6 +1101,9 @@ canvas.addEventListener('mousedown', (e) => {
         isPanning = true;
         panStartX = mouseX;
         panStartY = mouseY;
+        clickStartX = mouseX;
+        clickStartY = mouseY;
+        mouseDragged = false;
         e.preventDefault();
     }
 });
@@ -1100,13 +1113,9 @@ canvas.addEventListener('mouseup', (e) => {
         const rect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
-        const dragDistance = Math.sqrt(
-            Math.pow(mouseX - panStartX, 2) + Math.pow(mouseY - panStartY, 2)
-        );
-        
         isPanning = false;
         
-        if (dragDistance < dragThreshold && !isDead) {
+        if (!mouseDragged && !isDead) {
             const cellX = Math.floor(mouseWorldX / CELL_SIZE);
             const cellY = Math.floor(mouseWorldY / CELL_SIZE);
             
@@ -1126,7 +1135,7 @@ canvas.addEventListener('mouseup', (e) => {
             }
         }
     } else if (e.button === 1) {
-        if (!isDead) {
+        if (!mouseDragged && !isDead) {
             const cellX = Math.floor(mouseWorldX / CELL_SIZE);
             const cellY = Math.floor(mouseWorldY / CELL_SIZE);
             console.log('Middle clicking cell (chord):', cellX, cellY);
