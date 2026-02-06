@@ -507,6 +507,14 @@ function invalidateChunksForCells(cells) {
         const chunkX = Math.floor(cell.x / CHUNK_SIZE);
         const chunkY = Math.floor(cell.y / CHUNK_SIZE);
         chunksToInvalidate.add(`${chunkX},${chunkY}`);
+        
+        const localX = ((cell.x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        const localY = ((cell.y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        
+        if (localX === 0) chunksToInvalidate.add(`${chunkX - 1},${chunkY}`);
+        if (localX === CHUNK_SIZE - 1) chunksToInvalidate.add(`${chunkX + 1},${chunkY}`);
+        if (localY === 0) chunksToInvalidate.add(`${chunkX},${chunkY - 1}`);
+        if (localY === CHUNK_SIZE - 1) chunksToInvalidate.add(`${chunkX},${chunkY + 1}`);
     }
     for (const key of chunksToInvalidate) {
         chunks.delete(key);
@@ -533,6 +541,30 @@ function requestChunksForCells(cells) {
         } else {
             dirtyChunks.add(chunkKey);
         }
+        
+        const localX = ((cell.x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        const localY = ((cell.y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        
+        if (localX === 0) {
+            const adjKey = `${chunkX - 1},${chunkY}`;
+            if (visibleChunks.has(adjKey)) chunkKeys.add(adjKey);
+            else dirtyChunks.add(adjKey);
+        }
+        if (localX === CHUNK_SIZE - 1) {
+            const adjKey = `${chunkX + 1},${chunkY}`;
+            if (visibleChunks.has(adjKey)) chunkKeys.add(adjKey);
+            else dirtyChunks.add(adjKey);
+        }
+        if (localY === 0) {
+            const adjKey = `${chunkX},${chunkY - 1}`;
+            if (visibleChunks.has(adjKey)) chunkKeys.add(adjKey);
+            else dirtyChunks.add(adjKey);
+        }
+        if (localY === CHUNK_SIZE - 1) {
+            const adjKey = `${chunkX},${chunkY + 1}`;
+            if (visibleChunks.has(adjKey)) chunkKeys.add(adjKey);
+            else dirtyChunks.add(adjKey);
+        }
     }
     
     if (chunkKeys.size > 0) {
@@ -545,6 +577,14 @@ function markDirtyChunksForCells(cells) {
         const chunkX = Math.floor(cell.x / CHUNK_SIZE);
         const chunkY = Math.floor(cell.y / CHUNK_SIZE);
         dirtyChunks.add(`${chunkX},${chunkY}`);
+        
+        const localX = ((cell.x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        const localY = ((cell.y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+        
+        if (localX === 0) dirtyChunks.add(`${chunkX - 1},${chunkY}`);
+        if (localX === CHUNK_SIZE - 1) dirtyChunks.add(`${chunkX + 1},${chunkY}`);
+        if (localY === 0) dirtyChunks.add(`${chunkX},${chunkY - 1}`);
+        if (localY === CHUNK_SIZE - 1) dirtyChunks.add(`${chunkX},${chunkY + 1}`);
     }
 }
 
