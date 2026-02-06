@@ -62,7 +62,7 @@ class Game {
                     if (!areaIsClear) break;
                 }
                 
-                if (areaIsClear) {
+                if (areaIsClear && this.hasGuaranteedSolveAfterSpawn(x, y)) {
                     return { x, y };
                 }
             }
@@ -74,6 +74,80 @@ class Game {
             x: Math.floor(Math.random() * 1000 - 500),
             y: Math.floor(Math.random() * 1000 - 500)
         };
+    }
+
+    simulateUncoverCells(x, y) {
+        const startCell = this.grid.getCell(x, y);
+        if (startCell.state === 'uncovered' || startCell.flag || startCell.isMine) {
+            return [];
+        }
+        
+        const uncovered = new Map();
+        const processed = new Set();
+        const toProcess = [{ x, y }];
+        processed.add(`${x},${y}`);
+        
+        while (toProcess.length > 0) {
+            const current = toProcess.shift();
+            const currentKey = `${current.x},${current.y}`;
+            const adjMines = this.grid.countAdjacentMines(current.x, current.y);
+            uncovered.set(currentKey, { x: current.x, y: current.y, adjacentMines: adjMines });
+            
+            if (adjMines !== 0) continue;
+            
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    if (dx === 0 && dy === 0) continue;
+                    const nx = current.x + dx;
+                    const ny = current.y + dy;
+                    const nKey = `${nx},${ny}`;
+                    if (processed.has(nKey)) continue;
+                    processed.add(nKey);
+                    const nCell = this.grid.getCell(nx, ny);
+                    if (nCell.state === 'uncovered') continue;
+                    if (nCell.flag) continue;
+                    if (nCell.isMine) continue;
+                    toProcess.push({ x: nx, y: ny });
+                }
+            }
+        }
+        
+        return Array.from(uncovered.values());
+    }
+    
+    hasGuaranteedSolveAfterSpawn(x, y) {
+        const uncoveredCells = this.simulateUncoverCells(x, y);
+        if (uncoveredCells.length === 0) return false;
+        
+        const uncoveredSet = new Set(uncoveredCells.map(c => `${c.x},${c.y}`));
+        
+        for (const cell of uncoveredCells) {
+            if (cell.adjacentMines !== 1) continue;
+            
+            let coveredCount = 0;
+            
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    if (dx === 0 && dy === 0) continue;
+                    const nx = cell.x + dx;
+                    const ny = cell.y + dy;
+                    const nKey = `${nx},${ny}`;
+                    if (uncoveredSet.has(nKey)) continue;
+                    const nCell = this.grid.getCell(nx, ny);
+                    if (nCell.state === 'uncovered') continue;
+                    if (nCell.flag) continue;
+                    coveredCount++;
+                    if (coveredCount > 1) break;
+                }
+                if (coveredCount > 1) break;
+            }
+            
+            if (coveredCount === 1) {
+                return true;
+            }
+        }
+        
+        return false;
     }
     
     addPlayer(id) {
@@ -211,6 +285,34 @@ class Game {
         }
         
         if (flagCount !== cell.adjacentMines) {
+            const coveredUnflagged = [];
+            for (const { x: ax, y: ay, cell: adjCell } of adjacentCells) {
+                if (adjCell.state === 'covered' && !adjCell.flag) {
+                    coveredUnflagged.push({ x: ax, y: ay });
+                }
+            }
+            if (coveredUnflagged.length > 0 && flagCount + coveredUnflagged.length === cell.adjacentMines) {
+                for (const pos of coveredUnflagged) {
+                    if (!this.grid.isMine(pos.x, pos.y)) {
+                        return { success: false, error: 'Flag count does not match number' };
+                    }
+                }
+                const flags = [];
+                for (const pos of coveredUnflagged) {
+                    const flagResult = this.grid.toggleFlag(pos.x, pos.y, playerId);
+                    if (flagResult.success && flagResult.flagged) {
+                        flags.push({ x: pos.x, y: pos.y, flagged: true });
+                    }
+                }
+                return {
+                    success: true,
+                    update: {
+                        type: 'autoFlag',
+                        playerId: playerId,
+                        flags: flags
+                    }
+                };
+            }
             return { success: false, error: 'Flag count does not match number' };
         }
         

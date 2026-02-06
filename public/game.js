@@ -30,6 +30,8 @@ let lastZoom = 1.0;
 let clickStartX = 0;
 let clickStartY = 0;
 let mouseDragged = false;
+let panStartCameraX = 0;
+let panStartCameraY = 0;
 let chunkTextures = new Map();
 let offscreenCanvas = document.createElement('canvas');
 let offscreenCtx = offscreenCanvas.getContext('2d', { alpha: true });
@@ -155,6 +157,11 @@ socket.on('gameUpdate', (data) => {
     } else if (data.type === 'flag') {
         if (data.x !== undefined && data.y !== undefined) {
             requestChunksForCells([{ x: data.x, y: data.y }]);
+        }
+        
+    } else if (data.type === 'autoFlag') {
+        if (data.flags && data.flags.length > 0) {
+            requestChunksForCells(data.flags);
         }
         
     } else if (data.type === 'respawn') {
@@ -1103,6 +1110,8 @@ canvas.addEventListener('mousedown', (e) => {
         panStartY = mouseY;
         clickStartX = mouseX;
         clickStartY = mouseY;
+        panStartCameraX = cameraX;
+        panStartCameraY = cameraY;
         mouseDragged = false;
         e.preventDefault();
     }
@@ -1114,8 +1123,10 @@ canvas.addEventListener('mouseup', (e) => {
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
         isPanning = false;
+        const cameraMovedDuringPan = Math.abs(cameraX - panStartCameraX) > 0.01 ||
+            Math.abs(cameraY - panStartCameraY) > 0.01;
         
-        if (!mouseDragged && !isDead) {
+        if (!mouseDragged && !cameraMovedDuringPan && !isDead) {
             const cellX = Math.floor(mouseWorldX / CELL_SIZE);
             const cellY = Math.floor(mouseWorldY / CELL_SIZE);
             
@@ -1135,7 +1146,9 @@ canvas.addEventListener('mouseup', (e) => {
             }
         }
     } else if (e.button === 1) {
-        if (!mouseDragged && !isDead) {
+        const cameraMovedDuringPan = Math.abs(cameraX - panStartCameraX) > 0.01 ||
+            Math.abs(cameraY - panStartCameraY) > 0.01;
+        if (!mouseDragged && !cameraMovedDuringPan && !isDead) {
             const cellX = Math.floor(mouseWorldX / CELL_SIZE);
             const cellY = Math.floor(mouseWorldY / CELL_SIZE);
             console.log('Middle clicking cell (chord):', cellX, cellY);

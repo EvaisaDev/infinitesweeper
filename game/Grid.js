@@ -1,5 +1,5 @@
 const CHUNK_SIZE = 16;
-const MINE_PROBABILITY = 0.25;
+const MINE_PROBABILITY = 0.19;
 
 class Grid {
     constructor() {
