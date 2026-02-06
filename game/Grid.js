@@ -1,5 +1,6 @@
 const CHUNK_SIZE = 16;
 const MINE_PROBABILITY = 0.19;
+const MINE_ASSIGN_RADIUS = 3;
 
 class Grid {
     constructor() {
@@ -7,7 +8,9 @@ class Grid {
         this.cellStates = new Map();
         this.cellOwners = new Map();
         this.cellFlags = new Map();
-        this.cellSeeds = new Map();
+        this.cellMines = new Map();
+        this.cellNumbers = new Map();
+        this.safeZones = [];
         console.log('Grid initialized - all data cleared');
     }
     
@@ -28,37 +31,127 @@ class Grid {
         };
     }
     
-    seededRandom(x, y) {
-        const cellKey = this.getCellKey(x, y);
-        const cellSeed = this.cellSeeds.get(cellKey);
-        const seedOffset = cellSeed !== undefined ? cellSeed : 0;
-        const seed = x * 374761393 + y * 668265263 + seedOffset * 982451653;
-        let value = Math.abs(Math.sin(seed) * 43758.5453123);
-        return value - Math.floor(value);
+    setSafeZones(safeZones) {
+        this.safeZones = Array.isArray(safeZones) ? safeZones : [];
     }
-    
-    isMine(x, y) {
-        const cellKey = this.getCellKey(x, y);
-        return this.seededRandom(x, y) < MINE_PROBABILITY;
+
+    isWithinSafeZone(x, y) {
+        for (const zone of this.safeZones) {
+            const dx = Math.abs(x - zone.x);
+            const dy = Math.abs(y - zone.y);
+            if (Math.max(dx, dy) <= zone.radius) {
+                return true;
+            }
+        }
+        return false;
     }
-    
+
+    assignMine(x, y) {
+        const cellKey = this.getCellKey(x, y);
+        if (this.cellMines.has(cellKey)) {
+            return this.cellMines.get(cellKey);
+        }
+
+        let isMine = false;
+        if (!this.isWithinSafeZone(x, y)) {
+            isMine = Math.random() < MINE_PROBABILITY;
+        }
+
+        this.cellMines.set(cellKey, isMine);
+        return isMine;
+    }
+
     countAdjacentMines(x, y) {
         let count = 0;
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
                 if (dx === 0 && dy === 0) continue;
-                if (this.isMine(x + dx, y + dy)) {
+                const nx = x + dx;
+                const ny = y + dy;
+                if (this.isMine(nx, ny)) {
                     count++;
                 }
             }
         }
         return count;
     }
+
+    activateCell(x, y) {
+        const cellKey = this.getCellKey(x, y);
+        const isMine = this.assignMine(x, y);
+        this.assignMinesInRadius(x, y, MINE_ASSIGN_RADIUS);
+        if (!isMine) {
+            const adjacentMines = this.countAdjacentMines(x, y);
+            this.cellNumbers.set(cellKey, adjacentMines);
+            return { isMine: false, adjacentMines };
+        }
+        return { isMine: true, adjacentMines: null };
+    }
+
+    isMine(x, y) {
+        const cellKey = this.getCellKey(x, y);
+        return this.cellMines.get(cellKey) || false;
+    }
+
+    assignMinesInRadius(x, y, radius) {
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dy = -radius; dy <= radius; dy++) {
+                if (dx === 0 && dy === 0) continue;
+                const nx = x + dx;
+                const ny = y + dy;
+                const nKey = this.getCellKey(nx, ny);
+                if (this.cellMines.has(nKey)) continue;
+                if (this.cellStates.get(nKey) === 'uncovered') {
+                    this.cellMines.set(nKey, false);
+                    continue;
+                }
+                this.assignMine(nx, ny);
+            }
+        }
+    }
+
+    hasAdjacentUncovered(x, y) {
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const nKey = this.getCellKey(x + dx, y + dy);
+                if (this.cellStates.get(nKey) === 'uncovered') {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    hasAssignedMineInRadius(x, y, radius) {
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dy = -radius; dy <= radius; dy++) {
+                const key = this.getCellKey(x + dx, y + dy);
+                if (this.cellMines.get(key)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    hasOtherPlayerNearby(x, y, playerId, radius) {
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dy = -radius; dy <= radius; dy++) {
+                const nKey = this.getCellKey(x + dx, y + dy);
+                const owner = this.cellOwners.get(nKey);
+                if (owner && owner !== playerId && this.cellStates.get(nKey) === 'uncovered') {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     
-    getChunk(chunkX, chunkY) {
+    getChunk(chunkX, chunkY, options = null) {
         const key = this.getChunkKey(chunkX, chunkY);
+        const includeMines = options && options.includeMines;
         
-        if (this.chunks.has(key)) {
+        if (!includeMines && this.chunks.has(key)) {
             return this.chunks.get(key);
         }
         
@@ -67,36 +160,60 @@ class Grid {
             y: chunkY,
             cells: []
         };
-        
-        for (let localY = 0; localY < CHUNK_SIZE; localY++) {
-            for (let localX = 0; localX < CHUNK_SIZE; localX++) {
-                const worldX = chunkX * CHUNK_SIZE + localX;
-                const worldY = chunkY * CHUNK_SIZE + localY;
-                const cellKey = this.getCellKey(worldX, worldY);
-                
-                chunk.cells.push({
-                    x: worldX,
-                    y: worldY,
-                    isMine: this.isMine(worldX, worldY),
-                    adjacentMines: this.countAdjacentMines(worldX, worldY),
-                    state: this.cellStates.get(cellKey) || 'covered',
-                    owner: this.cellOwners.get(cellKey) || null,
-                    flag: this.cellFlags.get(cellKey) || false
-                });
+
+        const keys = new Set();
+        for (const cellKey of this.cellMines.keys()) {
+            keys.add(cellKey);
+        }
+        for (const cellKey of this.cellStates.keys()) {
+            keys.add(cellKey);
+        }
+        for (const cellKey of this.cellFlags.keys()) {
+            keys.add(cellKey);
+        }
+
+        for (const [cellKey, state] of this.cellStates.entries()) {
+            if (state !== 'uncovered') continue;
+            const [x, y] = cellKey.split(',').map(Number);
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    const nx = x + dx;
+                    const ny = y + dy;
+                    if (nx < chunkX * CHUNK_SIZE || nx >= (chunkX + 1) * CHUNK_SIZE) continue;
+                    if (ny < chunkY * CHUNK_SIZE || ny >= (chunkY + 1) * CHUNK_SIZE) continue;
+                    keys.add(this.getCellKey(nx, ny));
+                }
             }
         }
-        
-        this.chunks.set(key, chunk);
+
+        for (const cellKey of keys) {
+            const [x, y] = cellKey.split(',').map(Number);
+            if (x < chunkX * CHUNK_SIZE || x >= (chunkX + 1) * CHUNK_SIZE) continue;
+            if (y < chunkY * CHUNK_SIZE || y >= (chunkY + 1) * CHUNK_SIZE) continue;
+
+            const isUncovered = this.cellStates.get(cellKey) === 'uncovered';
+            chunk.cells.push({
+                x,
+                y,
+                isMine: isUncovered ? (this.cellMines.get(cellKey) || false) : (includeMines ? (this.cellMines.get(cellKey) || false) : false),
+                adjacentMines: isUncovered
+                    ? (this.cellNumbers.has(cellKey) ? this.cellNumbers.get(cellKey) : this.countAdjacentMines(x, y))
+                    : null,
+                state: this.cellStates.get(cellKey) || 'covered',
+                owner: this.cellOwners.get(cellKey) || null,
+                flag: this.cellFlags.get(cellKey) || false
+            });
+        }
         return chunk;
     }
-    
+
     getCell(x, y) {
         const cellKey = this.getCellKey(x, y);
         return {
             x,
             y,
-            isMine: this.isMine(x, y),
-            adjacentMines: this.countAdjacentMines(x, y),
+            isMine: this.cellMines.get(cellKey) || false,
+            adjacentMines: this.cellNumbers.has(cellKey) ? this.cellNumbers.get(cellKey) : null,
             state: this.cellStates.get(cellKey) || 'covered',
             owner: this.cellOwners.get(cellKey) || null,
             flag: this.cellFlags.get(cellKey) || false
@@ -115,18 +232,26 @@ class Grid {
             return { success: false, reason: 'flagged' };
         }
         
-        const isMine = this.isMine(x, y);
-        
+        const activation = this.activateCell(x, y);
+        const isMine = activation.isMine;
+
         this.cellStates.set(cellKey, 'uncovered');
         this.cellOwners.set(cellKey, playerId);
         
         const chunksToInvalidate = new Set();
         const { chunkX, chunkY } = this.worldToChunk(x, y);
         chunksToInvalidate.add(this.getChunkKey(chunkX, chunkY));
+
+        for (let dx = -MINE_ASSIGN_RADIUS; dx <= MINE_ASSIGN_RADIUS; dx++) {
+            for (let dy = -MINE_ASSIGN_RADIUS; dy <= MINE_ASSIGN_RADIUS; dy++) {
+                const { chunkX: nChunkX, chunkY: nChunkY } = this.worldToChunk(x + dx, y + dy);
+                chunksToInvalidate.add(this.getChunkKey(nChunkX, nChunkY));
+            }
+        }
+
+        const uncoveredCells = [{ x, y, isMine, adjacentMines: activation.adjacentMines }];
         
-        const uncoveredCells = [{ x, y, isMine, adjacentMines: this.countAdjacentMines(x, y) }];
-        
-        if (!isMine && this.countAdjacentMines(x, y) === 0) {
+        if (!isMine && activation.adjacentMines === 0) {
             const toProcess = [{ x, y }];
             const processed = new Set([cellKey]);
             
@@ -146,18 +271,23 @@ class Grid {
                         
                         if (this.cellStates.get(nKey) === 'uncovered') continue;
                         if (this.cellFlags.get(nKey)) continue;
-                        if (this.isMine(nx, ny)) continue;
-                        
+                        const neighborActivation = this.activateCell(nx, ny);
+                        if (neighborActivation.isMine) continue;
                         this.cellStates.set(nKey, 'uncovered');
                         this.cellOwners.set(nKey, playerId);
                         
-                        const adjMines = this.countAdjacentMines(nx, ny);
-                        uncoveredCells.push({ x: nx, y: ny, isMine: false, adjacentMines: adjMines });
+                        uncoveredCells.push({ x: nx, y: ny, isMine: false, adjacentMines: neighborActivation.adjacentMines });
                         
                         const { chunkX: nChunkX, chunkY: nChunkY } = this.worldToChunk(nx, ny);
                         chunksToInvalidate.add(this.getChunkKey(nChunkX, nChunkY));
+                        for (let ix = -MINE_ASSIGN_RADIUS; ix <= MINE_ASSIGN_RADIUS; ix++) {
+                            for (let iy = -MINE_ASSIGN_RADIUS; iy <= MINE_ASSIGN_RADIUS; iy++) {
+                                const { chunkX: aChunkX, chunkY: aChunkY } = this.worldToChunk(nx + ix, ny + iy);
+                                chunksToInvalidate.add(this.getChunkKey(aChunkX, aChunkY));
+                            }
+                        }
                         
-                        if (adjMines === 0) {
+                        if (neighborActivation.adjacentMines === 0) {
                             toProcess.push({ x: nx, y: ny });
                         }
                     }
@@ -231,20 +361,34 @@ class Grid {
         return { cellsToReset, flagsToRemove };
     }
     
-    recoverCell(x, y) {
+    recoverCell(x, y, playerId = null) {
         const cellKey = this.getCellKey(x, y);
         this.cellOwners.delete(cellKey);
         this.cellStates.delete(cellKey);
         this.cellFlags.delete(cellKey);
-        
-        const newSeed = Math.floor(Math.random() * 1000000000);
-        this.cellSeeds.set(cellKey, newSeed);
+        this.cellMines.delete(cellKey);
+        this.cellNumbers.delete(cellKey);
         
         const { chunkX, chunkY } = this.worldToChunk(x, y);
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
                 const neighborKey = this.getChunkKey(chunkX + dx, chunkY + dy);
                 this.chunks.delete(neighborKey);
+            }
+        }
+
+        for (let dx = -MINE_ASSIGN_RADIUS; dx <= MINE_ASSIGN_RADIUS; dx++) {
+            for (let dy = -MINE_ASSIGN_RADIUS; dy <= MINE_ASSIGN_RADIUS; dy++) {
+                const nx = x + dx;
+                const ny = y + dy;
+                const nKey = this.getCellKey(nx, ny);
+                if (this.cellStates.get(nKey) === 'uncovered') continue;
+                if (this.cellOwners.get(nKey)) continue;
+                if (this.hasAdjacentUncovered(nx, ny)) continue;
+                if (playerId && this.hasOtherPlayerNearby(nx, ny, playerId, MINE_ASSIGN_RADIUS)) continue;
+                this.cellMines.delete(nKey);
+                this.cellNumbers.delete(nKey);
+                this.cellFlags.delete(nKey);
             }
         }
         

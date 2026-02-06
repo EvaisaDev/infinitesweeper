@@ -15,10 +15,10 @@ const io = new Server(server, {
     maxHttpBufferSize: 1e6
 });
 
-app.use(express.static('public'));
-
 const game = new Game();
 game.setIO(io);
+
+const debugPlayers = new Set();
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
@@ -30,17 +30,46 @@ function generateSessionToken() {
     return require('crypto').randomBytes(32).toString('hex');
 }
 
+function isValidAdminToken(token) {
+    if (!token) return false;
+    const session = adminSessions.get(token);
+    if (!session) return false;
+    if (session.expiresAt < Date.now()) {
+        adminSessions.delete(token);
+        return false;
+    }
+    return true;
+}
+
+app.use(express.static('public'));
+
+app.get('/debug', (req, res) => {
+    const token = req.query.token;
+    if (!isValidAdminToken(token)) {
+        res.redirect('/admin.html');
+        return;
+    }
+    res.sendFile(path.join(__dirname, 'debug.html'));
+});
+
 io.on('connection', (socket) => {
     console.log(`Socket connected: ${socket.id}`);
     
     let playerInitialized = false;
-    
-    function initializePlayer() {
-        if (playerInitialized) return;
-        playerInitialized = true;
-        
-        const playerData = game.addPlayer(socket.id);
-        
+    const connectionTime = Date.now();
+    const isAdmin = socket.handshake.auth && socket.handshake.auth.role === 'admin';
+    const debugToken = socket.handshake.auth && socket.handshake.auth.debugToken;
+    const isDebug = debugToken && isValidAdminToken(debugToken);
+    if (isDebug) {
+        debugPlayers.add(socket.id);
+    }
+    if (debugToken && !isDebug) {
+        socket.emit('debugInvalid');
+        socket.disconnect(true);
+        return;
+    }
+
+    function emitPlayerInit(playerData) {
         socket.emit('init', {
             playerId: socket.id,
             player: playerData.player,
@@ -58,14 +87,54 @@ io.on('connection', (socket) => {
         socket.broadcast.emit('playerJoined', playerData.player);
     }
     
-    socket.on('requestChunks', (data) => {
+    function initializePlayer() {
+        if (playerInitialized) return;
+        playerInitialized = true;
+        
+        const playerData = game.addPlayer(socket.id);
+        const initDelayMs = Date.now() - connectionTime;
+        console.log(`Player initialized: ${socket.id} after ${initDelayMs}ms`);
+        emitPlayerInit(playerData);
+    }
+
+    function initializePlayerAt(x, y) {
+        if (playerInitialized) return;
+        playerInitialized = true;
+        
+        const playerData = game.addPlayerAt(socket.id, x, y);
+        const initDelayMs = Date.now() - connectionTime;
+        console.log(`Player initialized: ${socket.id} after ${initDelayMs}ms`);
+        emitPlayerInit(playerData);
+    }
+
+    function ensurePlayerInitialized() {
+        if (playerInitialized) return true;
+        if (isDebug) return false;
         initializePlayer();
-        const chunks = game.getChunks(data.chunkKeys);
+        return true;
+    }
+
+    socket.on('initGame', () => {
+        if (isAdmin) return;
+        if (isDebug) return;
+        initializePlayer();
+    });
+    
+    socket.on('requestChunks', (data) => {
+        if (isAdmin) return;
+        if (!isDebug && !ensurePlayerInitialized()) return;
+        const reqToken = (data && data.debugToken) || debugToken;
+        const hasDebugFlag = data && data.debug === true;
+        const tokenValid = reqToken && isValidAdminToken(reqToken);
+        const includeMines = hasDebugFlag && tokenValid;
+        console.log('requestChunks - isDebug:', isDebug, 'hasDebugFlag:', hasDebugFlag, 'reqToken:', !!reqToken, 'tokenValid:', tokenValid, 'includeMines:', includeMines);
+        const chunks = game.getChunks(data.chunkKeys, includeMines ? { includeMines: true } : null);
         socket.emit('chunks', chunks);
     });
     
     socket.on('move', (data) => {
-        initializePlayer();
+        if (isAdmin) return;
+        if (!ensurePlayerInitialized()) return;
         const result = game.handleMove(socket.id, data);
         if (result.success) {
             io.emit('gameUpdate', result.update);
@@ -75,7 +144,8 @@ io.on('connection', (socket) => {
     });
     
     socket.on('flag', (data) => {
-        initializePlayer();
+        if (isAdmin) return;
+        if (!ensurePlayerInitialized()) return;
         const result = game.handleFlag(socket.id, data);
         if (result.success) {
             io.emit('gameUpdate', result.update);
@@ -83,15 +153,50 @@ io.on('connection', (socket) => {
     });
     
     socket.on('chord', (data) => {
-        initializePlayer();
+        if (isAdmin) return;
+        if (!ensurePlayerInitialized()) return;
         const result = game.handleChord(socket.id, data);
         if (result.success) {
             io.emit('gameUpdate', result.update);
         }
     });
+
+    socket.on('debugSpawn', (data) => {
+        console.log('debugSpawn received:', 'isDebug:', isDebug, 'playerInitialized:', playerInitialized, 'data:', data);
+        if (!isDebug) return;
+        if (!data || data.x === undefined || data.y === undefined) return;
+        
+        if (!playerInitialized) {
+            initializePlayerAt(data.x, data.y);
+        } else {
+            const player = game.players.get(socket.id);
+            if (player && !player.alive) {
+                game.grid.clearPlayerCells(socket.id);
+                player.respawn(data.x, data.y);
+                game.updateSafeZones();
+                
+                const uncoverResult = game.grid.uncoverCell(data.x, data.y, socket.id);
+                if (uncoverResult.success && !uncoverResult.isMine) {
+                    player.addScore(uncoverResult.uncoveredCells.length);
+                }
+                
+                io.emit('gameUpdate', {
+                    type: 'respawn',
+                    playerId: socket.id,
+                    x: data.x,
+                    y: data.y,
+                    uncoveredCells: uncoverResult.uncoveredCells
+                });
+                
+                game.deadPlayers.delete(socket.id);
+            }
+        }
+    });
     
     socket.on('disconnect', (reason) => {
         console.log(`Socket disconnected: ${socket.id}, reason: ${reason}`);
+        
+        debugPlayers.delete(socket.id);
         
         if (playerInitialized) {
             const cellsCleared = game.removePlayer(socket.id);
@@ -164,7 +269,7 @@ io.on('connection', (socket) => {
 });
 
 setInterval(() => {
-    const updates = game.update();
+    const updates = game.update(debugPlayers);
     if (updates.length > 0) {
         io.emit('gameUpdate', { updates });
     }

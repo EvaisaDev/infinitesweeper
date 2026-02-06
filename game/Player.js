@@ -6,6 +6,7 @@ class Player {
         this.color = color;
         this.score = 0;
         this.alive = true;
+        this.isSpawning = true;
         this.deathTime = null;
         this.startCells = [{ x, y }];
     }
@@ -23,6 +24,7 @@ class Player {
         this.x = x;
         this.y = y;
         this.alive = true;
+        this.isSpawning = true;
         this.deathTime = null;
         this.startCells = [{ x, y }];
     }
@@ -34,7 +36,8 @@ class Player {
             y: this.y,
             color: this.color,
             score: this.score,
-            alive: this.alive
+            alive: this.alive,
+            isSpawning: this.isSpawning
         };
     }
 }

@@ -14,6 +14,7 @@ class Game {
         this.deadPlayers = new Map();
         this.colorIndex = 0;
         this.io = null;
+        this.safeRadius = 5;
         console.log('Game initialized - player count:', this.players.size);
     }
     
@@ -26,145 +27,125 @@ class Game {
         this.colorIndex++;
         return color;
     }
-    
+
+    updateSafeZones() {
+        const zones = [];
+        for (const player of this.players.values()) {
+            if (player.alive) {
+                zones.push({ x: player.x, y: player.y, radius: this.safeRadius });
+            }
+        }
+        this.grid.setSafeZones(zones);
+    }
+
     findSpawnLocation() {
         const activePlayers = Array.from(this.players.values()).filter(p => p.alive);
         
-        let attempts = 0;
-        const maxAttempts = 100;
-        
-        while (attempts < maxAttempts) {
-            let x, y;
-            
-            if (activePlayers.length === 0) {
-                x = Math.floor(Math.random() * 1000 - 500);
-                y = Math.floor(Math.random() * 1000 - 500);
-            } else {
-                const targetPlayer = activePlayers[Math.floor(Math.random() * activePlayers.length)];
-                const offset = Math.floor(Math.random() * 100 - 50);
-                const angle = Math.random() * Math.PI * 2;
-                
-                x = Math.floor(targetPlayer.x + Math.cos(angle) * offset);
-                y = Math.floor(targetPlayer.y + Math.sin(angle) * offset);
-            }
-            
-            if (!this.grid.isMine(x, y) && this.grid.countAdjacentMines(x, y) === 0) {
-                let areaIsClear = true;
-                
-                for (let dx = -10; dx <= 10; dx++) {
-                    for (let dy = -10; dy <= 10; dy++) {
-                        const checkCell = this.grid.getCell(x + dx, y + dy);
-                        if (checkCell.state === 'uncovered' && checkCell.owner) {
-                            areaIsClear = false;
-                            break;
-                        }
-                    }
-                    if (!areaIsClear) break;
-                }
-                
-                if (areaIsClear && this.hasGuaranteedSolveAfterSpawn(x, y)) {
-                    return { x, y };
-                }
-            }
-            
-            attempts++;
+        if (activePlayers.length === 0) {
+            return {
+                x: Math.floor(Math.random() * 1000 - 500),
+                y: Math.floor(Math.random() * 1000 - 500)
+            };
         }
         
+        const maxAttempts = 1000;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const targetPlayer = activePlayers[Math.floor(Math.random() * activePlayers.length)];
+            const distance = 20 + Math.floor(Math.random() * 41);
+            const angle = Math.random() * Math.PI * 2;
+            
+            const candidate = {
+                x: Math.floor(targetPlayer.x + Math.cos(angle) * distance),
+                y: Math.floor(targetPlayer.y + Math.sin(angle) * distance)
+            };
+            
+            let validDistance = true;
+            for (const player of activePlayers) {
+                const dx = candidate.x - player.x;
+                const dy = candidate.y - player.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 20 || dist > 60) {
+                    validDistance = false;
+                    break;
+                }
+            }
+            
+            if (validDistance) {
+                return candidate;
+            }
+        }
+        
+        const targetPlayer = activePlayers[Math.floor(Math.random() * activePlayers.length)];
+        const distance = 40;
+        const angle = Math.random() * Math.PI * 2;
         return {
-            x: Math.floor(Math.random() * 1000 - 500),
-            y: Math.floor(Math.random() * 1000 - 500)
+            x: Math.floor(targetPlayer.x + Math.cos(angle) * distance),
+            y: Math.floor(targetPlayer.y + Math.sin(angle) * distance)
         };
     }
 
-    simulateUncoverCells(x, y) {
-        const startCell = this.grid.getCell(x, y);
-        if (startCell.state === 'uncovered' || startCell.flag || startCell.isMine) {
-            return [];
-        }
+    
+    addPlayer(id) {
+        const spawn = this.findSpawnLocation();
+        return this.addPlayerAt(id, spawn.x, spawn.y);
+    }
+
+    addPlayerAt(id, x, y) {
+        const color = this.getNextColor();
+        const player = new Player(id, x, y, color);
         
-        const uncovered = new Map();
-        const processed = new Set();
+        this.players.set(id, player);
+        this.updateSafeZones();
+        
+        const safeRadius = 5;
+        const isInSafeZone = (sx, sy) => {
+            const dx = sx - x;
+            const dy = sy - y;
+            return Math.sqrt(dx * dx + dy * dy) <= safeRadius;
+        };
+        
+        const uncoveredCells = [];
         const toProcess = [{ x, y }];
+        const processed = new Set();
         processed.add(`${x},${y}`);
         
         while (toProcess.length > 0) {
             const current = toProcess.shift();
-            const currentKey = `${current.x},${current.y}`;
-            const adjMines = this.grid.countAdjacentMines(current.x, current.y);
-            uncovered.set(currentKey, { x: current.x, y: current.y, adjacentMines: adjMines });
             
-            if (adjMines !== 0) continue;
+            const cell = this.grid.getCell(current.x, current.y);
+            if (cell.state === 'uncovered') continue;
+            if (cell.flag) continue;
             
-            for (let dx = -1; dx <= 1; dx++) {
-                for (let dy = -1; dy <= 1; dy++) {
-                    if (dx === 0 && dy === 0) continue;
-                    const nx = current.x + dx;
-                    const ny = current.y + dy;
-                    const nKey = `${nx},${ny}`;
-                    if (processed.has(nKey)) continue;
-                    processed.add(nKey);
-                    const nCell = this.grid.getCell(nx, ny);
-                    if (nCell.state === 'uncovered') continue;
-                    if (nCell.flag) continue;
-                    if (nCell.isMine) continue;
-                    toProcess.push({ x: nx, y: ny });
+            if (!isInSafeZone(current.x, current.y)) {
+                this.grid.assignMinesInRadius(current.x, current.y, 3);
+            }
+            
+            const result = this.grid.uncoverCell(current.x, current.y, id);
+            if (!result.success || result.isMine) continue;
+            
+            uncoveredCells.push(...result.uncoveredCells);
+            
+            if (result.uncoveredCells[0]?.adjacentMines === 0) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        if (dx === 0 && dy === 0) continue;
+                        const nx = current.x + dx;
+                        const ny = current.y + dy;
+                        const nKey = `${nx},${ny}`;
+                        if (!processed.has(nKey)) {
+                            processed.add(nKey);
+                            toProcess.push({ x: nx, y: ny });
+                        }
+                    }
                 }
             }
         }
         
-        return Array.from(uncovered.values());
-    }
-    
-    hasGuaranteedSolveAfterSpawn(x, y) {
-        const uncoveredCells = this.simulateUncoverCells(x, y);
-        if (uncoveredCells.length === 0) return false;
-        
-        const uncoveredSet = new Set(uncoveredCells.map(c => `${c.x},${c.y}`));
-        
-        for (const cell of uncoveredCells) {
-            if (cell.adjacentMines !== 1) continue;
-            
-            let coveredCount = 0;
-            
-            for (let dx = -1; dx <= 1; dx++) {
-                for (let dy = -1; dy <= 1; dy++) {
-                    if (dx === 0 && dy === 0) continue;
-                    const nx = cell.x + dx;
-                    const ny = cell.y + dy;
-                    const nKey = `${nx},${ny}`;
-                    if (uncoveredSet.has(nKey)) continue;
-                    const nCell = this.grid.getCell(nx, ny);
-                    if (nCell.state === 'uncovered') continue;
-                    if (nCell.flag) continue;
-                    coveredCount++;
-                    if (coveredCount > 1) break;
-                }
-                if (coveredCount > 1) break;
-            }
-            
-            if (coveredCount === 1) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-    
-    addPlayer(id) {
-        const spawn = this.findSpawnLocation();
-        const color = this.getNextColor();
-        const player = new Player(id, spawn.x, spawn.y, color);
-        
-        this.players.set(id, player);
-        
-        const uncoverResult = this.grid.uncoverCell(spawn.x, spawn.y, id);
-        if (uncoverResult.success && !uncoverResult.isMine) {
-            player.addScore(uncoverResult.uncoveredCells.length);
-        }
+        player.addScore(uncoveredCells.length);
         
         return {
             player: player.toJSON(),
-            uncoveredCells: uncoverResult.success ? uncoverResult.uncoveredCells : []
+            uncoveredCells: uncoveredCells
         };
     }
     
@@ -172,11 +153,12 @@ class Game {
         const clearResult = this.grid.clearPlayerCells(id);
         
         for (const cell of clearResult.cellsToReset) {
-            this.grid.recoverCell(cell.x, cell.y);
+            this.grid.recoverCell(cell.x, cell.y, id);
         }
         
         this.players.delete(id);
         this.deadPlayers.delete(id);
+        this.updateSafeZones();
         
         return clearResult.cellsToReset;
     }
@@ -193,7 +175,7 @@ class Game {
             }
             
             const cell = playerCells[index];
-            this.grid.recoverCell(cell.x, cell.y);
+            this.grid.recoverCell(cell.x, cell.y, playerId);
             
             return {
                 playerId: playerId,
@@ -242,7 +224,7 @@ class Game {
                     if (dx === 0 && dy === 0) continue;
                     
                     const adjCell = this.grid.getCell(cell.x + dx, cell.y + dy);
-                    if (adjCell.state === 'covered' && !adjCell.isMine) {
+                    if (adjCell.state === 'covered' && !this.grid.isMine(cell.x + dx, cell.y + dy)) {
                         return true;
                     }
                 }
@@ -251,6 +233,7 @@ class Game {
         
         return false;
     }
+
     
     handleChord(playerId, data) {
         const { x, y } = data;
@@ -337,6 +320,7 @@ class Game {
         if (hitMine) {
             const finalScore = player.score;
             player.die();
+            this.updateSafeZones();
             player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
@@ -373,6 +357,7 @@ class Game {
         if (!this.hasValidMoves(playerId)) {
             const finalScore = player.score;
             player.die();
+            this.updateSafeZones();
             player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
@@ -407,7 +392,7 @@ class Game {
         };
     }
     
-    handleMove(playerId, data) {
+    handleMove(playerId, data, force = false) {
         const player = this.players.get(playerId);
         if (!player || !player.alive) {
             return { success: false, error: 'Player not active' };
@@ -420,7 +405,7 @@ class Game {
             return { success: false, error: 'Cell already uncovered' };
         }
         
-        if (!this.isAdjacentToPlayerCell(playerId, x, y)) {
+        if (!force && !this.isAdjacentToPlayerCell(playerId, x, y)) {
             return { success: false, error: 'Not adjacent to your cells' };
         }
         
@@ -433,6 +418,7 @@ class Game {
         if (result.isMine) {
             const finalScore = player.score;
             player.die();
+            this.updateSafeZones();
             player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
@@ -469,6 +455,7 @@ class Game {
         if (!this.hasValidMoves(playerId)) {
             const finalScore = player.score;
             player.die();
+            this.updateSafeZones();
             player.score = 0;
             this.deadPlayers.set(playerId, Date.now());
             
@@ -579,20 +566,22 @@ class Game {
         };
     }
     
-    getChunks(chunkKeys) {
+    getChunks(chunkKeys, options = null) {
         const chunks = [];
         for (const key of chunkKeys) {
             const [x, y] = key.split(',').map(Number);
-            chunks.push(this.grid.getChunk(x, y));
+            chunks.push(this.grid.getChunk(x, y, options));
         }
         return chunks;
     }
+
     
-    update() {
+    update(debugPlayers = new Set()) {
         const updates = [];
         const now = Date.now();
         
         for (const [playerId, deathTime] of this.deadPlayers.entries()) {
+            if (debugPlayers.has(playerId)) continue;
             if (now - deathTime >= 30000) {
                 const player = this.players.get(playerId);
                 if (player && !player.alive) {
@@ -600,6 +589,7 @@ class Game {
                     
                     const spawn = this.findSpawnLocation();
                     player.respawn(spawn.x, spawn.y);
+                    this.updateSafeZones();
                     
                     const uncoverResult = this.grid.uncoverCell(spawn.x, spawn.y, playerId);
                     if (uncoverResult.success && !uncoverResult.isMine) {

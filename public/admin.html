@@ -148,6 +148,7 @@
             <textarea id="messageText" placeholder="Enter your message here..."></textarea>
             
             <button id="sendMessageBtn">Send to All Players</button>
+            <button id="openDebugBtn">Open Debug Mode</button>
             <button id="logoutBtn">Logout</button>
             
             <div id="messageStatus" class="hidden"></div>
@@ -161,7 +162,7 @@
     
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = io();
+        const socket = io({ auth: { role: 'admin' } });
         let authenticated = false;
         let authToken = null;
         
@@ -169,6 +170,7 @@
         const adminPanel = document.getElementById('adminPanel');
         const loginBtn = document.getElementById('loginBtn');
         const logoutBtn = document.getElementById('logoutBtn');
+        const openDebugBtn = document.getElementById('openDebugBtn');
         const sendMessageBtn = document.getElementById('sendMessageBtn');
         const usernameInput = document.getElementById('username');
         const passwordInput = document.getElementById('password');
@@ -207,6 +209,16 @@
             adminPanel.classList.add('hidden');
             passwordInput.value = '';
         });
+
+        openDebugBtn.addEventListener('click', () => {
+            if (!authenticated || !authToken) {
+                showMessage('Login required', 'error');
+                return;
+            }
+            const url = `/debug?token=${encodeURIComponent(authToken)}&debug=1`;
+            window.open(url, '_blank');
+        });
+
         
         socket.on('adminLoginResult', (data) => {
             if (data.success) {
