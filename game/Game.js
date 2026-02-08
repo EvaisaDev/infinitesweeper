@@ -694,6 +694,66 @@ class Game {
             }
             return;
         }
+        let legacyTotal = 0;
+        let legacyDelay = 50;
+        for (let i = 0; i < cells.length; i++) {
+            legacyTotal += legacyDelay;
+            legacyDelay = Math.max(10, legacyDelay * 0.95);
+        }
+        if (legacyTotal <= 10000) {
+            let index = 0;
+            let delay = 50;
+            
+            const recoverNext = () => {
+                if (index >= cells.length) {
+                    if (this.io) {
+                        this.io.emit('recoveryComplete', { playerId: playerId });
+                    }
+                    return;
+                }
+                
+                const cell = cells[index];
+                this.grid.recoverCell(cell.x, cell.y, playerId);
+                
+                if (this.io) {
+                    const updatedCells = [];
+                    const seen = new Set();
+                    for (let dx = -1; dx <= 1; dx++) {
+                        for (let dy = -1; dy <= 1; dy++) {
+                            if (dx === 0 && dy === 0) continue;
+                            const adjCell = this.grid.getCell(cell.x + dx, cell.y + dy);
+                            if (adjCell.state === 'uncovered') {
+                                const key = `${adjCell.x},${adjCell.y}`;
+                                if (!seen.has(key)) {
+                                    seen.add(key);
+                                    updatedCells.push(adjCell);
+                                }
+                            }
+                        }
+                    }
+                    if (updatedCells.length > 0) {
+                        this.io.emit('cellsUpdated', { cells: updatedCells });
+                    }
+                }
+                
+                if (this.io) {
+                    this.io.emit('cellRecovered', { 
+                        playerId: playerId,
+                        x: cell.x,
+                        y: cell.y
+                    });
+                }
+                
+                index++;
+                
+                delay = Math.max(10, delay * 0.95);
+                
+                setTimeout(recoverNext, delay);
+            };
+            
+            recoverNext();
+            return;
+        }
         
         let index = 0;
         const totalDurationMs = 10000;
