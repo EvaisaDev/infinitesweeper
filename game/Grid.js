@@ -146,6 +146,24 @@ class Grid {
         }
         return false;
     }
+
+    reserveSafeZone(x, y, radius, playerId = null) {
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dy = -radius; dy <= radius; dy++) {
+                const nx = x + dx;
+                const ny = y + dy;
+                const nKey = this.getCellKey(nx, ny);
+                if (this.cellStates.get(nKey) === 'uncovered') continue;
+                const owner = this.cellOwners.get(nKey);
+                if (owner && owner !== playerId) continue;
+                this.cellMines.set(nKey, false);
+                this.cellNumbers.delete(nKey);
+                this.cellFlags.delete(nKey);
+                const { chunkX, chunkY } = this.worldToChunk(nx, ny);
+                this.chunks.delete(this.getChunkKey(chunkX, chunkY));
+            }
+        }
+    }
     
     getChunk(chunkX, chunkY, options = null) {
         const key = this.getChunkKey(chunkX, chunkY);
@@ -385,7 +403,7 @@ class Grid {
                 if (this.cellStates.get(nKey) === 'uncovered') continue;
                 if (this.cellOwners.get(nKey)) continue;
                 if (this.hasAdjacentUncovered(nx, ny)) continue;
-                if (playerId && this.hasOtherPlayerNearby(nx, ny, playerId, MINE_ASSIGN_RADIUS)) continue;
+                if (this.hasOtherPlayerNearby(nx, ny, playerId || null, MINE_ASSIGN_RADIUS)) continue;
                 this.cellMines.delete(nKey);
                 this.cellNumbers.delete(nKey);
                 this.cellFlags.delete(nKey);

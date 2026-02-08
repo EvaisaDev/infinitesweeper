@@ -23,8 +23,23 @@ const debugPlayers = new Set();
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'change-this-secret-key';
+const AI_PLAYER_COUNT = Math.max(0, parseInt(process.env.AI_PLAYER_COUNT || '0', 10) || 0);
 
 const adminSessions = new Map();
+
+if (AI_PLAYER_COUNT > 0) {
+    const aiPlayers = game.addAIPlayers(AI_PLAYER_COUNT);
+    for (const ai of aiPlayers) {
+        io.emit('playerJoined', ai.player);
+        if (ai.uncoveredCells && ai.uncoveredCells.length > 0) {
+            io.emit('gameUpdate', {
+                type: 'spawn',
+                playerId: ai.id,
+                uncoveredCells: ai.uncoveredCells
+            });
+        }
+    }
+}
 
 function generateSessionToken() {
     return require('crypto').randomBytes(32).toString('hex');
@@ -131,6 +146,11 @@ io.on('connection', (socket) => {
         const chunks = game.getChunks(data.chunkKeys, includeMines ? { includeMines: true } : null);
         socket.emit('chunks', chunks);
     });
+
+    socket.on('requestActivePlayers', () => {
+        if (isAdmin) return;
+        socket.emit('activePlayers', { activePlayers: game.getActivePlayers() });
+    });
     
     socket.on('move', (data) => {
         if (isAdmin) return;
@@ -174,6 +194,9 @@ io.on('connection', (socket) => {
                 game.grid.clearPlayerCells(socket.id);
                 player.respawn(data.x, data.y);
                 game.updateSafeZones();
+                if (!game.grid.hasOtherPlayerNearby(data.x, data.y, socket.id, game.safeRadius)) {
+                    game.grid.reserveSafeZone(data.x, data.y, game.safeRadius, socket.id);
+                }
                 
                 const uncoverResult = game.grid.uncoverCell(data.x, data.y, socket.id);
                 if (uncoverResult.success && !uncoverResult.isMine) {
@@ -204,7 +227,7 @@ io.on('connection', (socket) => {
             socket.broadcast.emit('playerLeft', socket.id);
             
             if (cellsCleared && cellsCleared.length > 0) {
-                io.emit('cellsCleared', { cells: cellsCleared });
+                io.emit('cellsCleared', { playerId: socket.id, cells: cellsCleared });
             }
         }
         

@@ -1,6 +1,7 @@
 const urlParams = new URLSearchParams(window.location.search);
 const debugToken = urlParams.get('token');
-const isDebugMode = urlParams.get('debug') === '1' && !!debugToken;
+const isDebugPage = window.location.pathname.endsWith('/debug') || window.location.pathname.endsWith('/debug.html');
+const isDebugMode = (urlParams.get('debug') === '1' && !!debugToken) || (isDebugPage && !!debugToken);
 const socket = isDebugMode ? io({ auth: { debugToken } }) : io();
 if (!isDebugMode) {
     socket.emit('initGame');
@@ -9,6 +10,9 @@ if (!isDebugMode) {
 socket.on('connect', () => {
     if (!isDebugMode && hasSpawned) {
         socket.emit('initGame');
+    }
+    if (isDebugMode && !hasSpawned) {
+        socket.emit('requestActivePlayers');
     }
 });
 
@@ -50,6 +54,7 @@ let panStartCameraX = 0;
 let panStartCameraY = 0;
 let hasSpawned = false;
 let showDebugMines = true;
+let debugPlayerCycleIndex = -1;
 
 let dirtyChunks = new Set();
 let uncoverRevealTimes = new Map();
@@ -109,13 +114,31 @@ socket.on('init', (data) => {
     requestVisibleChunks();
 });
 
+socket.on('activePlayers', (data) => {
+    if (!data || !data.activePlayers) return;
+    players.clear();
+    for (const p of data.activePlayers) {
+        players.set(p.id, p);
+    }
+    updateUI();
+});
+
 socket.on('playerJoined', (playerData) => {
     players.set(playerData.id, playerData);
+    if (playerData.id === playerId) {
+        player = playerData;
+    }
     updateUI();
 });
 
 socket.on('playerLeft', (id) => {
     players.delete(id);
+    if (deadPlayerCells.has(id)) {
+        deadPlayerCells.delete(id);
+    }
+    if (debugPlayerCycleIndex >= players.size) {
+        debugPlayerCycleIndex = -1;
+    }
     updateUI();
 });
 
@@ -125,6 +148,9 @@ socket.on('cellsCleared', (data) => {
         markDirtyChunksForCells(data.cells);
         invalidateChunksForCells(data.cells);
         requestChunksForCells(data.cells);
+    }
+    if (data.playerId && deadPlayerCells.has(data.playerId)) {
+        deadPlayerCells.delete(data.playerId);
     }
 });
 
@@ -654,6 +680,23 @@ function updateUI() {
     document.getElementById('playerCount').textContent = `Players: ${players.size}`;
 }
 
+function cycleCameraToNextPlayer() {
+    const playerList = Array.from(players.values());
+    if (playerList.length === 0) return;
+    playerList.sort((a, b) => {
+        if (a.id < b.id) return -1;
+        if (a.id > b.id) return 1;
+        return 0;
+    });
+    debugPlayerCycleIndex = (debugPlayerCycleIndex + 1) % playerList.length;
+    const target = playerList[debugPlayerCycleIndex];
+    if (!target) return;
+    cameraX = target.x * CELL_SIZE;
+    cameraY = target.y * CELL_SIZE;
+    lastCameraX = cameraX;
+    lastCameraY = cameraY;
+}
+
 function updateLeaderboard(leaderboardData) {
     const content = document.getElementById('leaderboardContent');
     if (!leaderboardData || leaderboardData.length === 0) {
@@ -754,6 +797,8 @@ function render() {
     const scaledCellSize = CELL_SIZE * zoom;
     const offsetX = canvas.width / 2 - cameraX * zoom;
     const offsetY = canvas.height / 2 - cameraY * zoom;
+    const renderNow = Date.now();
+    const visibleCells = new Map();
     
     const simplifiedRendering = scaledCellSize < 16;
     
@@ -790,17 +835,22 @@ function render() {
             if (cell.state === 'uncovered') {
                 const cellKey = `${cell.x},${cell.y}`;
                 const revealAt = uncoverRevealTimes.get(cellKey);
-                if (revealAt && Date.now() < revealAt) {
+                if (revealAt && renderNow < revealAt) {
                     continue;
                 }
                 if (revealAt) {
                     uncoverRevealTimes.delete(cellKey);
                 }
+                visibleCells.set(cellKey, cell);
                 renderUncoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering);
             } else if (shouldRenderCovered) {
                 renderCoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering, false);
             }
         }
+    }
+
+    if (visibleCells.size > 0) {
+        renderPlayerBorders(visibleCells, scaledCellSize, offsetX, offsetY);
     }
     
     if (isDebugMode && showDebugMines) {
@@ -847,6 +897,69 @@ function render() {
     if (isDebugMode) {
         renderChunkBorders(scaledCellSize, offsetX, offsetY);
     }
+}
+
+function renderPlayerBorders(visibleCells, scaledCellSize, offsetX, offsetY) {
+    const thickness = Math.min(Math.max(3, Math.round(5 * zoom)), Math.floor(scaledCellSize / 2));
+    const half = thickness / 2;
+    for (const cell of visibleCells.values()) {
+        if (!cell.owner) continue;
+        const ownerA = players.get(cell.owner);
+        if (!ownerA) continue;
+        const colorA = darkenColor(ownerA.color, 0.65);
+        const rightKey = `${cell.x + 1},${cell.y}`;
+        const downKey = `${cell.x},${cell.y + 1}`;
+        const rightCell = visibleCells.get(rightKey);
+        if (rightCell && rightCell.owner && rightCell.owner !== cell.owner) {
+            const ownerB = players.get(rightCell.owner);
+            if (ownerB) {
+                const screenX = cell.x * scaledCellSize + offsetX;
+                const screenY = cell.y * scaledCellSize + offsetY;
+                const xBoundary = screenX + scaledCellSize;
+                ctx.fillStyle = colorA;
+                ctx.fillRect(xBoundary - half, screenY, half, scaledCellSize);
+                ctx.fillStyle = darkenColor(ownerB.color, 0.65);
+                ctx.fillRect(xBoundary, screenY, half, scaledCellSize);
+            }
+        }
+        const downCell = visibleCells.get(downKey);
+        if (downCell && downCell.owner && downCell.owner !== cell.owner) {
+            const ownerB = players.get(downCell.owner);
+            if (ownerB) {
+                const screenX = cell.x * scaledCellSize + offsetX;
+                const screenY = cell.y * scaledCellSize + offsetY;
+                const yBoundary = screenY + scaledCellSize;
+                ctx.fillStyle = colorA;
+                ctx.fillRect(screenX, yBoundary - half, scaledCellSize, half);
+                ctx.fillStyle = darkenColor(ownerB.color, 0.65);
+                ctx.fillRect(screenX, yBoundary, scaledCellSize, half);
+            }
+        }
+    }
+}
+
+function darkenColor(color, factor) {
+    if (!color || typeof color !== 'string') return color;
+    if (color[0] !== '#' || (color.length !== 7 && color.length !== 4)) {
+        return color;
+    }
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    if (color.length === 4) {
+        r = parseInt(color[1] + color[1], 16);
+        g = parseInt(color[2] + color[2], 16);
+        b = parseInt(color[3] + color[3], 16);
+    } else {
+        r = parseInt(color.slice(1, 3), 16);
+        g = parseInt(color.slice(3, 5), 16);
+        b = parseInt(color.slice(5, 7), 16);
+    }
+    r = Math.max(0, Math.min(255, Math.round(r * factor)));
+    g = Math.max(0, Math.min(255, Math.round(g * factor)));
+    b = Math.max(0, Math.min(255, Math.round(b * factor)));
+    const toHex = (v) => v.toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
 function renderChunkBorders(scaledCellSize, offsetX, offsetY) {
@@ -1069,6 +1182,10 @@ function renderCellByCell() {
 let keys = {};
 window.addEventListener('keydown', (e) => {
     keys[e.key.toLowerCase()] = true;
+    if (isDebugMode && (e.key === ']' || e.code === 'BracketRight') && !e.repeat) {
+        cycleCameraToNextPlayer();
+        e.preventDefault();
+    }
 
 });
 
@@ -1161,6 +1278,26 @@ canvas.addEventListener('mousedown', (e) => {
         panStartCameraY = cameraY;
         mouseDragged = false;
         e.preventDefault();
+    }
+});
+
+window.addEventListener('mouseup', (e) => {
+    if (isPanning) {
+        isPanning = false;
+    }
+});
+
+window.addEventListener('blur', () => {
+    if (isPanning) {
+        isPanning = false;
+        mouseDragged = false;
+    }
+});
+
+canvas.addEventListener('mouseleave', () => {
+    if (isPanning) {
+        isPanning = false;
+        mouseDragged = false;
     }
 });
 
