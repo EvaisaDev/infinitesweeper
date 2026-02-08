@@ -19,6 +19,7 @@ class Game {
         this.aiNextActionAt = new Map();
         this.aiFocus = new Map();
         this.aiSkill = new Map();
+        this.aiIdCounter = 0;
         this.aiMoveIntervalMs = 350;
         this.aiProfiles = [
             { flagChance: 0.45, chordChance: 0.0, baseDelayMult: 1.6, guessDelayMin: 1100, guessDelayMax: 2100 },
@@ -41,8 +42,7 @@ class Game {
     addAIPlayers(count) {
         const added = [];
         for (let i = 0; i < count; i++) {
-            const id = `ai-${i + 1}`;
-            if (this.players.has(id)) continue;
+            const id = this.getNextAIId();
             const playerData = this.addPlayer(id);
             this.aiPlayers.add(id);
             this.aiNextActionAt.set(id, 0);
@@ -52,6 +52,37 @@ class Game {
             added.push({ id: id, player: playerData.player, uncoveredCells: playerData.uncoveredCells });
         }
         return added;
+    }
+
+    getNextAIId() {
+        let id = '';
+        do {
+            this.aiIdCounter += 1;
+            id = `ai-${this.aiIdCounter}`;
+        } while (this.players.has(id));
+        return id;
+    }
+
+    setAIPlayerCount(targetCount) {
+        const desired = Math.max(0, targetCount);
+        const current = this.aiPlayers.size;
+        const added = [];
+        const removed = [];
+        if (desired > current) {
+            added.push(...this.addAIPlayers(desired - current));
+        } else if (desired < current) {
+            const toRemove = current - desired;
+            const ids = Array.from(this.aiPlayers.values()).slice(0, toRemove);
+            for (const id of ids) {
+                const cellsCleared = this.removePlayer(id);
+                this.aiPlayers.delete(id);
+                this.aiNextActionAt.delete(id);
+                this.aiFocus.delete(id);
+                this.aiSkill.delete(id);
+                removed.push({ id: id, cellsCleared: cellsCleared });
+            }
+        }
+        return { added, removed };
     }
 
     updateSafeZones() {

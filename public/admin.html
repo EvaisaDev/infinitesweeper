@@ -152,10 +152,17 @@
             <button id="logoutBtn">Logout</button>
             
             <div id="messageStatus" class="hidden"></div>
+
+            <h3 style="font-size: 14px; margin-top: 16px; margin-bottom: 8px;">AI Players</h3>
+            <label for="aiCountInput">AI Player Count:</label>
+            <input type="text" id="aiCountInput" placeholder="0">
+            <button id="setAiCountBtn">Set AI Count</button>
             
             <div class="stats">
                 <strong>Server Statistics:</strong><br>
                 Connected Players: <span id="playerCount">0</span>
+                <br>
+                AI Players: <span id="aiCount">0</span>
             </div>
         </div>
     </div>
@@ -177,6 +184,9 @@
         const loginError = document.getElementById('loginError');
         const messageStatus = document.getElementById('messageStatus');
         const playerCountEl = document.getElementById('playerCount');
+        const aiCountEl = document.getElementById('aiCount');
+        const aiCountInput = document.getElementById('aiCountInput');
+        const setAiCountBtn = document.getElementById('setAiCountBtn');
         
         loginBtn.addEventListener('click', () => {
             const username = usernameInput.value;
@@ -200,6 +210,22 @@
             }
             
             socket.emit('adminBroadcast', { token: authToken, title, text });
+        });
+
+        setAiCountBtn.addEventListener('click', () => {
+            if (!authenticated || !authToken) {
+                showMessage('Login required', 'error');
+                return;
+            }
+            const raw = aiCountInput.value.trim();
+            const count = Math.max(0, parseInt(raw || '0', 10) || 0);
+            socket.emit('adminSetAIPlayers', { token: authToken, count });
+        });
+
+        aiCountInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                setAiCountBtn.click();
+            }
         });
         
         logoutBtn.addEventListener('click', () => {
@@ -250,6 +276,26 @@
         
         socket.on('adminStats', (data) => {
             playerCountEl.textContent = data.playerCount;
+            if (typeof data.aiCount === 'number') {
+                aiCountEl.textContent = data.aiCount;
+                if (document.activeElement !== aiCountInput) {
+                    aiCountInput.value = String(data.aiCount);
+                }
+            }
+        });
+
+        socket.on('adminSetAIPlayersResult', (data) => {
+            if (data.success) {
+                showMessage('AI player count updated', 'success');
+            } else {
+                showMessage(data.error || 'Failed to update AI count', 'error');
+                if (data.error === 'Unauthorized') {
+                    authenticated = false;
+                    authToken = null;
+                    loginWindow.classList.remove('hidden');
+                    adminPanel.classList.add('hidden');
+                }
+            }
         });
         
         function showMessage(text, type) {

@@ -272,6 +272,38 @@ io.on('connection', (socket) => {
         });
         socket.emit('adminBroadcastResult', { success: true });
     });
+
+    socket.on('adminSetAIPlayers', (data) => {
+        if (!data || !data.token) {
+            socket.emit('adminSetAIPlayersResult', { success: false, error: 'Unauthorized' });
+            return;
+        }
+        const token = data.token;
+        const session = adminSessions.get(token);
+        if (!session || session.socketId !== socket.id || session.expiresAt < Date.now()) {
+            socket.emit('adminSetAIPlayersResult', { success: false, error: 'Unauthorized' });
+            return;
+        }
+        const target = Math.max(0, parseInt(data.count || '0', 10) || 0);
+        const result = game.setAIPlayerCount(target);
+        for (const ai of result.added) {
+            io.emit('playerJoined', ai.player);
+            if (ai.uncoveredCells && ai.uncoveredCells.length > 0) {
+                io.emit('gameUpdate', {
+                    type: 'spawn',
+                    playerId: ai.id,
+                    uncoveredCells: ai.uncoveredCells
+                });
+            }
+        }
+        for (const removed of result.removed) {
+            io.emit('playerLeft', removed.id);
+            if (removed.cellsCleared && removed.cellsCleared.length > 0) {
+                io.emit('cellsCleared', { playerId: removed.id, cells: removed.cellsCleared });
+            }
+        }
+        socket.emit('adminSetAIPlayersResult', { success: true, count: target });
+    });
     
     socket.on('requestAdminStats', (data) => {
         if (!data || !data.token) {
@@ -286,7 +318,8 @@ io.on('connection', (socket) => {
         }
         
         socket.emit('adminStats', {
-            playerCount: game.players.size
+            playerCount: game.players.size,
+            aiCount: game.aiPlayers ? game.aiPlayers.size : 0
         });
     });
 });
