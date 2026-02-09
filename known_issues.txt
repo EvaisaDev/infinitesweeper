@@ -1,0 +1,8 @@
+Sometimes the camera fucking flies off into the distance for no apparent reason.
+People randomly die when clicking what should have been a save point, either something is fucking spawning bombs on top of other players or they have skill issue.
+Server lags like shit if theres more than like 10 people.
+Players sometimes spawn inside of eachother somehow, i tried to fix this several times and it still keeps happening. no idea if it is fixed at this point.
+Chording sometimes puts down wrong flags??? or bombs change without the numbers changing? i don't fucking know anyway people should realistically not be able to die when chording unless they manually put flags down.
+I think shit breaks if people disconnect in the middle of dying?
+If someone large dies it probably freezes the server.
+I wish the server wouldn't crash when i spawn 50 bots for shits and giggles lmao

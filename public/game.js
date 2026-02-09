@@ -1,7 +1,7 @@
 const urlParams = new URLSearchParams(window.location.search);
 const debugToken = urlParams.get('token');
-const isDebugPage = window.location.pathname.endsWith('/debug') || window.location.pathname.endsWith('/debug.html');
-const isDebugMode = (urlParams.get('debug') === '1' && !!debugToken) || (isDebugPage && !!debugToken);
+const isDebugPage = window.location.pathname.endsWith('/debug') || window.location.pathname.endsWith('/debug.html'); // I cannot fucking remember why i have a debug endpoint and a debug param but whatever.
+const isDebugMode = (urlParams.get('debug') === '1' && !!debugToken) || (isDebugPage && !!debugToken); // i probably had a separate debug thing before.
 const socket = isDebugMode ? io({ auth: { debugToken } }) : io();
 if (!isDebugMode) {
     socket.emit('initGame');
