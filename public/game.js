@@ -50,8 +50,6 @@ let lastZoom = 1.0;
 let clickStartX = 0;
 let clickStartY = 0;
 let mouseDragged = false;
-let panStartCameraX = 0;
-let panStartCameraY = 0;
 let hasSpawned = false;
 let showDebugMines = true;
 let debugPlayerCycleIndex = -1;
@@ -439,55 +437,6 @@ function handleDeath(reason) {
     }, 100);
 }
 
-function updateCellInChunk(cellData) {
-    const chunkX = Math.floor(cellData.x / CHUNK_SIZE);
-    const chunkY = Math.floor(cellData.y / CHUNK_SIZE);
-    const chunkKey = `${chunkX},${chunkY}`;
-    const chunk = chunks.get(chunkKey);
-    
-    if (chunk) {
-        let found = false;
-        for (const cell of chunk.cells) {
-            if (cell.x === cellData.x && cell.y === cellData.y) {
-                cell.state = 'uncovered';
-                cell.owner = cellData.owner || null;
-                cell.isMine = cellData.isMine || false;
-                cell.adjacentMines = cellData.adjacentMines || 0;
-                found = true;
-                break;
-            }
-        }
-        
-        if (!found) {
-            chunk.cells.push({
-                x: cellData.x,
-                y: cellData.y,
-                state: 'uncovered',
-                owner: cellData.owner || null,
-                isMine: cellData.isMine || false,
-                adjacentMines: cellData.adjacentMines || 0,
-                flag: false
-            });
-        }
-    }
-}
-
-function updateCellFlag(x, y, flagged) {
-    const chunkX = Math.floor(x / CHUNK_SIZE);
-    const chunkY = Math.floor(y / CHUNK_SIZE);
-    const chunkKey = `${chunkX},${chunkY}`;
-    const chunk = chunks.get(chunkKey);
-    
-    if (chunk) {
-        for (const cell of chunk.cells) {
-            if (cell.x === x && cell.y === y) {
-                cell.flag = flagged;
-                break;
-            }
-        }
-    }
-}
-
 function updateCellData(cellData) {
     const chunkX = Math.floor(cellData.x / CHUNK_SIZE);
     const chunkY = Math.floor(cellData.y / CHUNK_SIZE);
@@ -545,12 +494,6 @@ function invalidateChunksForCells(cells) {
     for (const key of chunksToInvalidate) {
         chunks.delete(key);
     }
-}
-
-function invalidateChunksForCell(x, y) {
-    const chunkX = Math.floor(x / CHUNK_SIZE);
-    const chunkY = Math.floor(y / CHUNK_SIZE);
-    chunks.delete(`${chunkX},${chunkY}`);
 }
 
 function requestChunksForCells(cells) {
@@ -1143,42 +1086,6 @@ function renderCoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRen
 
 }
 
-function renderCellByCell() {
-    const scaledCellSize = CELL_SIZE * zoom;
-    const offsetX = canvas.width / 2 - cameraX * zoom;
-    const offsetY = canvas.height / 2 - cameraY * zoom;
-    
-    const simplifiedRendering = scaledCellSize < 16;
-    
-    for (const chunk of chunks.values()) {
-        for (const cell of chunk.cells) {
-            const screenX = cell.x * scaledCellSize + offsetX;
-            const screenY = cell.y * scaledCellSize + offsetY;
-            
-            if (screenX + scaledCellSize < 0 || screenX > canvas.width ||
-                screenY + scaledCellSize < 0 || screenY > canvas.height) {
-                continue;
-            }
-            
-            if (scaledCellSize < 3) continue;
-            
-            if (cell.state === 'uncovered') {
-                const cellKey = `${cell.x},${cell.y}`;
-                const revealAt = uncoverRevealTimes.get(cellKey);
-                if (revealAt && Date.now() < revealAt) {
-                    continue;
-                }
-                if (revealAt) {
-                    uncoverRevealTimes.delete(cellKey);
-                }
-                renderUncoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering);
-            } else if (cell.flag) {
-                renderCoveredCell(cell, screenX, screenY, scaledCellSize, simplifiedRendering);
-            }
-        }
-    }
-}
-
 let keys = {};
 window.addEventListener('keydown', (e) => {
     keys[e.key.toLowerCase()] = true;
@@ -1195,23 +1102,17 @@ window.addEventListener('keyup', (e) => {
 
 function gameLoop() {
     const speed = 10;
-    let moved = false;
-    
     if (keys['w'] || keys['arrowup']) {
         cameraY -= speed;
-        moved = true;
     }
     if (keys['s'] || keys['arrowdown']) {
         cameraY += speed;
-        moved = true;
     }
     if (keys['a'] || keys['arrowleft']) {
         cameraX -= speed;
-        moved = true;
     }
     if (keys['d'] || keys['arrowright']) {
         cameraX += speed;
-        moved = true;
     }
     
     render();
@@ -1274,8 +1175,6 @@ canvas.addEventListener('mousedown', (e) => {
         panStartY = mouseY;
         clickStartX = mouseX;
         clickStartY = mouseY;
-        panStartCameraX = cameraX;
-        panStartCameraY = cameraY;
         mouseDragged = false;
         e.preventDefault();
     }

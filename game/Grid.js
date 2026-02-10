@@ -122,18 +122,6 @@ class Grid {
         return false;
     }
 
-    hasAssignedMineInRadius(x, y, radius) {
-        for (let dx = -radius; dx <= radius; dx++) {
-            for (let dy = -radius; dy <= radius; dy++) {
-                const key = this.getCellKey(x + dx, y + dy);
-                if (this.cellMines.get(key)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
     hasOtherPlayerNearby(x, y, playerId, radius) {
         for (let dx = -radius; dx <= radius; dx++) {
             for (let dy = -radius; dy <= radius; dy++) {

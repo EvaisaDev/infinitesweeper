@@ -6,9 +6,6 @@ class Player {
         this.color = color;
         this.score = 0;
         this.alive = true;
-        this.isSpawning = true;
-        this.deathTime = null;
-        this.startCells = [{ x, y }];
     }
     
     addScore(points) {
@@ -17,16 +14,12 @@ class Player {
     
     die() {
         this.alive = false;
-        this.deathTime = Date.now();
     }
     
     respawn(x, y) {
         this.x = x;
         this.y = y;
         this.alive = true;
-        this.isSpawning = true;
-        this.deathTime = null;
-        this.startCells = [{ x, y }];
     }
     
     toJSON() {
@@ -36,8 +29,7 @@ class Player {
             y: this.y,
             color: this.color,
             score: this.score,
-            alive: this.alive,
-            isSpawning: this.isSpawning
+            alive: this.alive
         };
     }
 }

@@ -256,29 +256,6 @@ class Game {
         return clearResult.cellsToReset;
     }
     
-    startCellRecovery(playerId) {
-        const playerCells = this.grid.getPlayerCells(playerId);
-        if (playerCells.length === 0) return;
-        
-        let index = 0;
-        const interval = setInterval(() => {
-            if (index >= playerCells.length) {
-                clearInterval(interval);
-                return;
-            }
-            
-            const cell = playerCells[index];
-            this.grid.recoverCell(cell.x, cell.y, playerId);
-            
-            return {
-                playerId: playerId,
-                cell: cell
-            };
-        }, 50);
-        
-        return interval;
-    }
-    
     getActivePlayers() {
         return Array.from(this.players.values()).map(p => p.toJSON());
     }
